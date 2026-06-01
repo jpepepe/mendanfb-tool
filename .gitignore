@@ -1,0 +1,15 @@
+# データファイル（GitHubには上げない）
+output/
+*.csv
+*.xlsx
+*.png
+*.docx
+credentials.json
+
+# Python
+__pycache__/
+*.pyc
+.env
+
+# Mac
+.DS_Store
