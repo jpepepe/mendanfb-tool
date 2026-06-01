@@ -9,6 +9,7 @@ import json, re, zipfile, os, tempfile, unicodedata
 from pathlib import Path
 from xml.etree import ElementTree as ET
 import anthropic
+from gdrive import upload_json
 
 # ── ページ設定 ────────────────────────────────────────────
 st.set_page_config(
@@ -98,8 +99,7 @@ def save_results(ca, grip, candidate, meeting_type, fmt,
                             '感情モーメント全件','感情スルー例','感情深掘り例',
                             '縦深掘りシーケンス','自己開示モーメント',
                             'バックトラッキングモーメント','クロージングCA','クロージングCD')}
-    json_path = OUTPUT_JSON / f"{key}.json"
-    json_path.write_text(json.dumps({
+    json_data = {
         "ca": ca, "grip": safe_grip, "candidate": candidate,
         "meeting_type": meeting_type, "format": fmt,
         # Call 1: スコアリング
@@ -112,7 +112,14 @@ def save_results(ca, grip, candidate, meeting_type, fmt,
         "self_disclosure_analysis":(deep_result or {}).get('self_disclosure_analysis', {}),
         "backtrack_analysis":      (deep_result or {}).get('backtrack_analysis', {}),
         "next_phrases":            (deep_result or {}).get('next_phrases', []),
-    }, ensure_ascii=False, indent=2), encoding='utf-8')
+    }
+    json_path = OUTPUT_JSON / f"{key}.json"
+    json_path.write_text(json.dumps(json_data, ensure_ascii=False, indent=2), encoding='utf-8')
+    # Google Drive にも保存
+    try:
+        upload_json(f"{key}.json", json_data, subfolder="json")
+    except Exception as e:
+        st.warning(f"Google Drive保存失敗（ローカルには保存済み）: {e}")
     return utt_path, json_path
 
 # ── ファイルパーサー ──────────────────────────────────────

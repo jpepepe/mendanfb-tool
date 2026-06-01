@@ -14,6 +14,7 @@ import requests
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import analysis_core as core
 import anthropic
+from gdrive import list_json_files, download_json as gdrive_download_json
 
 st.set_page_config(page_title="面談分析ダッシュボード", page_icon="📊", layout="wide")
 
@@ -400,57 +401,74 @@ def send_to_slack(webhook_url: str, d: dict) -> tuple[bool, str]:
 @st.cache_data(ttl=30)
 def load_all_records():
     records = []
+    # Google Drive から読み込み
+    try:
+        drive_files = list_json_files(subfolder="json")
+        for f in sorted(drive_files, key=lambda x: x["name"]):
+            try:
+                d = gdrive_download_json(f["id"])
+                _append_record(records, d, f["name"], f["id"])
+            except Exception:
+                continue
+        return pd.DataFrame(records)
+    except Exception:
+        pass
+    # フォールバック: ローカルから読み込み
     for f in sorted(OUTPUT_JSON.glob("*.json")):
         try:
             d = json.loads(f.read_text(encoding='utf-8'))
-            gd = d.get('grip_drivers', {})
-            bh = d.get('behaviors', {})
-            ov = d.get('overall', {})
-
-            # スコア集計（旧形式・新形式共通）
-            axes      = ['意向','適正','条件','認識統一','気づき']
-            scores    = {ax: gd.get(ax, {}).get('score', 0) for ax in axes}
-            total     = sum(scores.values())
-
-            # グレード（旧形式は計算で推定）
-            grade = ov.get('grade', '')
-            if not grade:
-                if total >= 13: grade = 'S'
-                elif total >= 10: grade = 'A'
-                elif total >= 7:  grade = 'B'
-                elif total >= 4:  grade = 'C'
-                else:             grade = 'D'
-
-            records.append({
-                '_file':       f.name,
-                '_path':       str(f),
-                '_raw':        d,
-                'CA':          d.get('ca', ''),
-                'グリップ':     d.get('grip', 'X'),
-                '候補者':       d.get('candidate', ''),
-                '面談種別':     d.get('meeting_type', ''),
-                'グレード':     grade,
-                '総合スコア':   total,
-                '意向':         scores['意向'],
-                '適正':         scores['適正'],
-                '条件':         scores['条件'],
-                '認識統一':     scores['認識統一'],
-                '気づき':       scores['気づき'],
-                '求職者発話比率':  round(bh.get('求職者発話比率', 0) * 100),
-                'フィラー回数':    bh.get('フィラー回数', 0),
-                'ポジティブ反応':  bh.get('ポジティブ反応', 0),
-                '感情スルー率':    bh.get('感情スルー率', 0),
-                '深掘り_価値観':   bh.get('深掘り_価値観', 0),
-                'バックトラッキング': bh.get('バックトラッキング', 0),
-                '縦深掘り最大':    bh.get('縦深掘り最大', 0),
-                '自己開示回数':    bh.get('自己開示回数', 0),
-                'MUST提案':        bh.get('MUST提案', False),
-                '次回アポ確定':    bh.get('次回アポ確定', False),
-                '新形式':          'overall' in d,
-            })
+            _append_record(records, d, f.name, str(f))
         except Exception:
             continue
     return pd.DataFrame(records)
+
+def _append_record(records, d, filename, path_or_id):
+    try:
+        gd = d.get('grip_drivers', {})
+        bh = d.get('behaviors', {})
+        ov = d.get('overall', {})
+
+        axes      = ['意向','適正','条件','認識統一','気づき']
+        scores    = {ax: gd.get(ax, {}).get('score', 0) for ax in axes}
+        total     = sum(scores.values())
+
+        grade = ov.get('grade', '')
+        if not grade:
+            if total >= 13: grade = 'S'
+            elif total >= 10: grade = 'A'
+            elif total >= 7:  grade = 'B'
+            elif total >= 4:  grade = 'C'
+            else:             grade = 'D'
+
+        records.append({
+            '_file':       filename,
+            '_path':       path_or_id,
+            '_raw':        d,
+            'CA':          d.get('ca', ''),
+            'グリップ':     d.get('grip', 'X'),
+            '候補者':       d.get('candidate', ''),
+            '面談種別':     d.get('meeting_type', ''),
+            'グレード':     grade,
+            '総合スコア':   total,
+            '意向':         scores['意向'],
+            '適正':         scores['適正'],
+            '条件':         scores['条件'],
+            '認識統一':     scores['認識統一'],
+            '気づき':       scores['気づき'],
+            '求職者発話比率':  round(bh.get('求職者発話比率', 0) * 100),
+            'フィラー回数':    bh.get('フィラー回数', 0),
+            'ポジティブ反応':  bh.get('ポジティブ反応', 0),
+            '感情スルー率':    bh.get('感情スルー率', 0),
+            '深掘り_価値観':   bh.get('深掘り_価値観', 0),
+            'バックトラッキング': bh.get('バックトラッキング', 0),
+            '縦深掘り最大':    bh.get('縦深掘り最大', 0),
+            '自己開示回数':    bh.get('自己開示回数', 0),
+            'MUST提案':        bh.get('MUST提案', False),
+            '次回アポ確定':    bh.get('次回アポ確定', False),
+            '新形式':          'overall' in d,
+        })
+    except Exception:
+        pass
 
 df_all = load_all_records()
 
