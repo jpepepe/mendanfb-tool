@@ -684,7 +684,11 @@ AXIS_LABELS = {
 
 for loop_i, (_, sel_row) in enumerate(selected_rows.iterrows()):
     selected_path = sel_row['_path']
-    d  = json.loads(Path(selected_path).read_text(encoding='utf-8'))
+    # Google DriveのファイルIDかローカルパスかを判定
+    if Path(selected_path).exists():
+        d = json.loads(Path(selected_path).read_text(encoding='utf-8'))
+    else:
+        d = gdrive_download_json(selected_path)
     gd = d.get('grip_drivers', {})
     bh = d.get('behaviors', {})
     ov = d.get('overall', {})
@@ -908,6 +912,13 @@ for loop_i, (_, sel_row) in enumerate(selected_rows.iterrows()):
         utt_file = core.find_utterances_file(
             d.get('ca',''), d.get('grip','X'),
             d.get('candidate',''), d.get('meeting_type',''))
+        # ローカルになければGoogle Driveから検索
+        if not utt_file:
+            safe_grip = d.get('grip','X') if d.get('grip','X') != '未入力' else 'X'
+            utt_filename = f"{d.get('ca','')}_{safe_grip}_{d.get('candidate','')}_{d.get('meeting_type','')}.json"
+            drive_utts = list_json_files(subfolder="utterances")
+            matched = [f for f in drive_utts if f["name"] == utt_filename]
+            utt_file = matched[0]["id"] if matched else None
         if is_old:
             st.caption('⚠️ 旧形式。再分析で詳細分析が追加されます')
         if not utt_file:
@@ -920,7 +931,10 @@ for loop_i, (_, sel_row) in enumerate(selected_rows.iterrows()):
                 btn_label = '🔄 旧データを再分析' if is_old else '🔄 再分析して上書き'
                 if st.button(btn_label, key=f'reanalyze_{uid}', use_container_width=True, type='primary'):
                     client   = anthropic.Anthropic(api_key=api_key)
-                    utt_data = json.loads(utt_file.read_text(encoding='utf-8'))
+                    if Path(str(utt_file)).exists():
+                        utt_data = json.loads(Path(str(utt_file)).read_text(encoding='utf-8'))
+                    else:
+                        utt_data = gdrive_download_json(str(utt_file))
                     utterances_data = utt_data.get('utterances', [])
                     ca   = d.get('ca','')
                     cand = d.get('candidate','')
