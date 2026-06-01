@@ -43,7 +43,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 OUTPUT_JSON   = Path(__file__).parent.parent / "output" / "json"
-SLACK_WEBHOOK = "https://hooks.slack.com/services/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"
+SLACK_WEBHOOK = st.secrets.get("SLACK_WEBHOOK_URL", "")
 
 def sq(text: str) -> str:
     """「」の二重表示を防ぐ：既に括弧があればそのまま、なければ付ける"""
