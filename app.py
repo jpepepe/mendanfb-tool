@@ -10,6 +10,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 import anthropic
 from gdrive import upload_json
+from analysis_core import safe_json_loads
 
 # ── ページ設定 ────────────────────────────────────────────
 st.set_page_config(
@@ -425,17 +426,9 @@ grade基準: S=全軸2.5以上+感情深掘り◎, A=総合スコア10以上, B=
 MUST提案: エンジニア意向弱→別職種提案、強→エンジニア路線確認、どちらかできていればtrue"""
 
     resp = client.messages.create(
-        model='claude-sonnet-4-6', max_tokens=4000,
+        model='claude-sonnet-4-6', max_tokens=8000,
         messages=[{'role': 'user', 'content': prompt}])
-    content = re.sub(r'```(?:json)?\s*', '', resp.content[0].text.strip()).strip()
-    try:
-        return json.loads(content)
-    except:
-        m = re.search(r'\{.*\}', content, re.DOTALL)
-        if m:
-            try: return json.loads(m.group())
-            except: pass
-        return {}
+    return safe_json_loads(resp.content[0].text)
 
 
 # ── Claude採点 ── Call 2: 深掘り詳細分析（新規・別呼び出し）──
@@ -520,22 +513,9 @@ CA名: {ca_name} / 求職者名: {cand_name}
         resp = client.messages.create(
             model='claude-sonnet-4-6', max_tokens=8000,
             messages=[{'role': 'user', 'content': prompt}])
-        content = re.sub(r'```(?:json)?\s*', '', resp.content[0].text.strip()).strip()
-        if resp.stop_reason == 'max_tokens':
-            content = content.rstrip(',\n ')
-            for _ in range(10):
-                content += '}'
-            content += ']}}}'
-        try:
-            return json.loads(content)
-        except:
-            m = re.search(r'\{.*\}', content, re.DOTALL)
-            if m:
-                try: return json.loads(m.group())
-                except: pass
+        return safe_json_loads(resp.content[0].text)
     except Exception:
-        pass
-    return {}
+        return {}
 
 # ── チェックポイント評価 ──────────────────────────────────
 def evaluate_checklist(metrics, claude_result):

@@ -12,6 +12,72 @@ OUTPUT_JSON.mkdir(parents=True, exist_ok=True)
 OUTPUT_UTT.mkdir(parents=True, exist_ok=True)
 
 
+def _scan_stack(s: str):
+    """文字列を走査し、未閉じの括弧スタックと「文字列の途中で終わったか」を返す"""
+    stack, in_str, esc = [], False, False
+    for ch in s:
+        if in_str:
+            if esc:        esc = False
+            elif ch == '\\': esc = True
+            elif ch == '"':  in_str = False
+        else:
+            if ch == '"':   in_str = True
+            elif ch in '{[': stack.append(ch)
+            elif ch == '}':
+                if stack and stack[-1] == '{': stack.pop()
+            elif ch == ']':
+                if stack and stack[-1] == '[': stack.pop()
+    return stack, in_str
+
+
+def safe_json_loads(content: str) -> dict:
+    """Claudeの返答をできる限りdictにする。max_tokensで途中で切れていても復旧する。"""
+    if not content:
+        return {}
+    content = re.sub(r'```(?:json)?\s*', '', content).strip().rstrip('`').strip()
+    # 1. そのまま
+    try:
+        return json.loads(content)
+    except Exception:
+        pass
+    # 2. 最初の { から最後の } まで切り出し
+    m = re.search(r'\{.*\}', content, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group())
+        except Exception:
+            pass
+    # 3. 途中で切れた応答を、括弧スタックを補完して復旧
+    start = content.find('{')
+    if start == -1:
+        return {}
+
+    def _close(t: str, stack) -> str:
+        t = t.rstrip()
+        t = re.sub(r',?\s*"[^"]*"\s*:\s*$', '', t)   # 値が無いキーを削除
+        t = re.sub(r'[,:]\s*$', '', t).rstrip()       # 末尾の , : を削除
+        for ch in reversed(stack):
+            t += '}' if ch == '{' else ']'
+        return t
+
+    s = content[start:]
+    stack, in_str = _scan_stack(s)
+    t = _close(s + ('"' if in_str else ''), stack)
+    for _ in range(60):
+        try:
+            return json.loads(t)
+        except Exception:
+            pass
+        # 末尾の閉じ括弧を外し、最後の（不完全な）要素を1つ削ってから閉じ直す
+        body = re.sub(r'[}\]]*$', '', t).rstrip()
+        body2 = re.sub(r',\s*("[^"]*"\s*:\s*)?[^,]*$', '', body).rstrip().rstrip(',')
+        if not body2 or body2 == body:
+            break
+        st2, in_s = _scan_stack(body2)
+        t = _close(body2 + ('"' if in_s else ''), st2)
+    return {}
+
+
 def score_with_claude(utterances, ca_name, cand_name, fmt, client):
     """Call 1: ルーブリックスコアリング"""
     transcript = '\n'.join(f"[{u['speaker']}] {u['text']}" for u in utterances)[:15000]
@@ -92,17 +158,9 @@ CA名: {ca_name} / 求職者名: {cand_name} / 形式: {fmt}
 grade基準: S=全軸2.5以上, A=10以上, B=7〜9, C=4〜6, D=3以下"""
 
     resp = client.messages.create(
-        model='claude-sonnet-4-6', max_tokens=4000,
+        model='claude-sonnet-4-6', max_tokens=8000,
         messages=[{'role': 'user', 'content': prompt}])
-    content = re.sub(r'```(?:json)?\s*', '', resp.content[0].text.strip()).strip()
-    try:
-        return json.loads(content)
-    except Exception:
-        m = re.search(r'\{.*\}', content, re.DOTALL)
-        if m:
-            try: return json.loads(m.group())
-            except: pass
-    return {}
+    return safe_json_loads(resp.content[0].text)
 
 
 def deep_analysis_with_claude(utterances, ca_name, cand_name, client):
@@ -162,23 +220,9 @@ CA名: {ca_name} / 求職者名: {cand_name}
         resp = client.messages.create(
             model='claude-sonnet-4-6', max_tokens=8000,
             messages=[{'role': 'user', 'content': prompt}])
-        content = re.sub(r'```(?:json)?\s*', '', resp.content[0].text.strip()).strip()
-        if resp.stop_reason == 'max_tokens':
-            # 途中で切れた場合は閉じ括弧を補完して無理やりパースを試みる
-            content = content.rstrip(',\n ')
-            for _ in range(10):
-                content += '}'
-            content += ']}}}'
-        try:
-            return json.loads(content)
-        except Exception:
-            m = re.search(r'\{.*\}', content, re.DOTALL)
-            if m:
-                try: return json.loads(m.group())
-                except: pass
+        return safe_json_loads(resp.content[0].text)
     except Exception:
-        pass
-    return {}
+        return {}
 
 
 def save_analysis(ca, grip, candidate, meeting_type, fmt,
