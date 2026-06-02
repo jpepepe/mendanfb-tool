@@ -529,7 +529,7 @@ with st.sidebar:
     cand_q    = st.text_input('候補者名で検索', placeholder='例：岡寺')
 
     st.divider()
-    st.caption('💬 Slack Webhook：設定済み ✅')
+    st.caption(f'💬 Slack Webhook keys: {list(st.secrets.keys())}')
 
     st.divider()
     st.caption(f'総データ数：{len(df_all)}件')
