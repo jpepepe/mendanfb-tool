@@ -682,130 +682,6 @@ with st.sidebar:
 
 uploaded = st.file_uploader('ファイルをアップロード（.docx または .txt）', type=['docx','txt'])
 
-# ── rerun後に自己採点を提出した場合、session_stateから結果を復元して表示 ──
-_pending_key = next(
-    (k for k in st.session_state
-     if k.startswith('app_result_')
-     and (st.session_state.get(f'app_sc_done_{k[len("app_result_"):]}')
-          or st.session_state.get(f'app_sc_skip_{k[len("app_result_"):]}'))),
-    None
-)
-if _pending_key and not uploaded:
-    _res = st.session_state[_pending_key]
-    claude_result = _res['claude_result']
-    deep_result   = _res['deep_result']
-    metrics       = _res['metrics']
-    ca_input      = _res['ca']
-    grip_input    = _res['grip']
-    cand_input    = _res['candidate']
-    meeting_type  = _res['meeting_type']
-    ref_file_app  = _res['ref_file']
-    json_path     = Path(ref_file_app)   # 名前のみ（表示用）
-    fn_nfc        = ref_file_app
-
-    gd          = claude_result.get('grip_drivers', {})
-    overall     = claude_result.get('overall', {})
-    total_score = sum(gd.get(k,{}).get('score',0)
-                      for k in ['意向','適正','条件','認識統一','気づき'])
-    _res_key    = _pending_key
-
-    sc_key_done = f'app_sc_done_{ref_file_app}'
-    sc_key_skip = f'app_sc_skip_{ref_file_app}'
-    sc_existing = load_selfcheck_app(ref_file_app)
-    sc_app      = sc_existing or {}
-
-    # ── ズレFB（採点した場合のみ） ──
-    if sc_app and not st.session_state.get(sc_key_skip):
-        ss_app = sc_app.get('self_scores', {})
-        def _fine_r(info):
-            v = info.get('score_fine')
-            if v is None: v = info.get('score', 0)
-            try: return float(v)
-            except: return 0.0
-        g_r = lambda v: f'{v:g}'
-        gap_html_r = ('<table style="width:100%;border-collapse:collapse;font-size:0.9rem">'
-                      '<tr style="background:#1F3864;color:white">'
-                      '<th style="padding:6px;text-align:left">評価軸</th>'
-                      '<th style="padding:6px">自己</th><th style="padding:6px">AI</th>'
-                      '<th style="padding:6px;text-align:left">ズレ</th></tr>')
-        blind_r, under_r, cweak_r, cstrong_r = [], [], [], []
-        for ax in AXES_APP:
-            ai_s   = _fine_r(gd.get(ax, {}))
-            self_s = float(ss_app.get(ax, 0) or 0)
-            diff   = round(self_s - ai_s, 1)
-            if diff >= 0.5:
-                tag = f'<span style="color:#c0392b">+{g_r(diff)} 自分が高め</span>'; bg='#fcecea'
-                blind_r.append((ax, self_s, ai_s, diff))
-            elif diff <= -0.5:
-                tag = f'<span style="color:#2471a3">{g_r(diff)} 自分が低め</span>'; bg='#EBF5FB'
-                under_r.append((ax, self_s, ai_s, diff))
-            else:
-                tag = f'<span style="color:#1e8449">±{g_r(abs(diff))} ほぼ一致</span>'; bg='#e2efda'
-                if ai_s >= 2: cstrong_r.append((ax, self_s, ai_s))
-                else:         cweak_r.append((ax, self_s, ai_s))
-            gap_html_r += (f'<tr style="background:{bg}"><td style="padding:6px">{AXIS_SHORT_APP[ax]}</td>'
-                           f'<td style="padding:6px;text-align:center">{g_r(self_s)}</td>'
-                           f'<td style="padding:6px;text-align:center">{g_r(ai_s)}</td>'
-                           f'<td style="padding:6px">{tag}</td></tr>')
-        gap_html_r += '</table>'
-        blind_r.sort(key=lambda x: -x[3])
-        st.divider()
-        with st.expander('🪞 自己評価とAIのズレ → あなた専用FB', expanded=True):
-            st.markdown(gap_html_r, unsafe_allow_html=True)
-            if blind_r:
-                b = blind_r[0]
-                st.error(f'🎯 **今日の最優先：{AXIS_SHORT_APP[b[0]]}** — 最大の盲点'
-                         f'（自分{b[1]:g}点 / AI{b[2]:g}点）。下のAI評価の根拠を確認してください。')
-            elif cweak_r:
-                w = sorted(cweak_r, key=lambda x: x[2])[0]
-                st.warning(f'🎯 **今日の最優先：{AXIS_SHORT_APP[w[0]]}** — 自他ともに課題と認識している軸です。')
-            else:
-                st.success('🎉 自己評価とAI評価がほぼ一致。自分の面談を客観視できています。')
-            for ax, s, a, _ in blind_r:
-                info = gd.get(ax, {}); ev = info.get('evidence') or []
-                h = (f'<div class="emotion-miss"><b>🔴 盲点：{AXIS_SHORT_APP[ax]}</b>'
-                     f'（自分{s:g}点 / AI{a:g}点）<br>'
-                     f'<small>「できた」と感じたが、AIは弱点と評価＝気づけていない伸びしろ。</small>')
-                if info.get('weakness'):    h += f'<br>📌 <b>AIが見た弱み：</b>{info["weakness"]}'
-                if ev:                      h += f'<br><small>根拠：{ev[0]}</small>'
-                if info.get('next_action'): h += f'<br>🚀 <b>次の一手：</b>{info["next_action"]}'
-                st.markdown(h + '</div>', unsafe_allow_html=True)
-            for ax, s, a in sorted(cweak_r, key=lambda x: x[2]):
-                info = gd.get(ax, {})
-                h = (f'<div style="background:#FEF9E7;border-left:4px solid #F39C12;'
-                     f'padding:8px 12px;border-radius:4px;margin:6px 0">'
-                     f'<b>🟠 共通課題：{AXIS_SHORT_APP[ax]}</b>（自分{s:g}点 / AI{a:g}点）<br>'
-                     f'<small>自覚あり。あとは行動に移すだけ。</small>')
-                if info.get('next_action'): h += f'<br>🚀 {info["next_action"]}'
-                st.markdown(h + '</div>', unsafe_allow_html=True)
-            for ax, s, a, _ in under_r:
-                info = gd.get(ax, {})
-                h = (f'<div class="bt-hit"><b>🔵 過小評価：{AXIS_SHORT_APP[ax]}</b>'
-                     f'（自分{s:g}点 / AI{a:g}点）<br>'
-                     f'<small>実はできています。自信を持って再現を。</small>')
-                if info.get('strength'): h += f'<br>💪 {info["strength"]}'
-                st.markdown(h + '</div>', unsafe_allow_html=True)
-            if cstrong_r:
-                names = '、'.join(AXIS_SHORT_APP[ax] for ax, _, _ in cstrong_r)
-                st.markdown(f'<div class="emotion-hit">🟢 <b>共通の強み：</b>{names}'
-                            f' — この型を継続！</div>', unsafe_allow_html=True)
-            if sc_app.get('best_self'):
-                st.markdown(f'**🙌 あなたが「良かった」と書いた点：** {sc_app["best_self"]}')
-            if sc_app.get('next_one_thing'):
-                st.markdown(f'**🚀 あなたが「次に試す」と書いたこと：** {sc_app["next_one_thing"]}')
-        st.divider()
-
-    # ── AI評価（全セクション） ──
-    grade = overall.get('grade','─')
-    grade_colors = {'S':'#1a5276','A':'#1e8449','B':'#2471a3','C':'#d35400','D':'#c0392b'}
-    st.markdown(
-        f'<div style="background:{grade_colors.get(grade,"#555")};color:white;'
-        f'padding:16px 20px;border-radius:10px;margin-bottom:12px">'
-        f'<span style="font-size:2.4rem;font-weight:bold">{grade}</span>'
-        f'&nbsp;&nbsp;<span style="font-size:1rem">{overall.get("grade_reason","")}</span>'
-        f'</div>', unsafe_allow_html=True)
-    st.info('👆 上の「FB生成ツール」タブで新しいファイルをアップロードすると、別の面談を分析できます。')
-    st.stop()
 
 if uploaded:
     fn_nfc = unicodedata.normalize('NFC', uploaded.name)
@@ -866,9 +742,8 @@ if uploaded:
             utterances, metrics, claude_result, deep_result)
         st.success(f'💾 保存完了　📊 分析結果：`output/json/{json_path.name}`　💬 話者分離：`output/utterances/{utt_path.name}`')
 
-        # ── 分析結果をsession_stateに保存（rerun後も復元できるよう） ──
-        _res_key = f'app_result_{json_path.name}'
-        st.session_state[_res_key] = {
+        # ── 分析結果をsession_stateに保存して表示フローに渡す ──
+        st.session_state['_app_res'] = {
             'claude_result': claude_result,
             'deep_result':   deep_result,
             'metrics':       metrics,
@@ -878,28 +753,41 @@ if uploaded:
             'meeting_type':  meeting_type,
             'ref_file':      json_path.name,
         }
+        # selfcheckフラグをリセット（新規分析のため）
+        st.session_state.pop('_app_sc_done', None)
+        st.session_state.pop('_app_sc_skip', None)
+        st.rerun()   # ← 表示フローへ
 
-        # ═══════════════════════════════════════════════════
-        # 結果表示（session_stateから復元）
-        # ═══════════════════════════════════════════════════
-        st.divider()
+# ═══════════════════════════════════════════════════════════
+# 結果表示ブロック（if button: の外 → rerun後も確実に実行される）
+# ═══════════════════════════════════════════════════════════
+if '_app_res' in st.session_state:
+    if True:  # インデントをネスト（表示コードは8スペース）
+        _r          = st.session_state['_app_res']
+        claude_result = _r['claude_result']
+        deep_result   = _r['deep_result']
+        metrics       = _r['metrics']
+        ca_input      = _r['ca']
+        grip_input    = _r['grip']
+        cand_input    = _r['candidate']
+        meeting_type  = _r['meeting_type']
+        ref_file_app  = _r['ref_file']
+        json_path     = type('_JP', (), {'name': ref_file_app})()
+
         gd      = claude_result.get('grip_drivers', {})
         overall = claude_result.get('overall', {})
         total_score = sum(gd.get(k,{}).get('score',0) for k in ['意向','適正','条件','認識統一','気づき'])
 
         # ══ セルフチェックゲート（AI評価を見る前に自己採点） ══
-        ref_file_app = st.session_state[_res_key]['ref_file']
-        sc_key_done  = f'app_sc_done_{ref_file_app}'
-        sc_key_skip  = f'app_sc_skip_{ref_file_app}'
         sc_existing  = load_selfcheck_app(ref_file_app)
         show_ai_app  = sc_existing is not None \
-                       or st.session_state.get(sc_key_done) \
-                       or st.session_state.get(sc_key_skip)
+                       or st.session_state.get('_app_sc_done') \
+                       or st.session_state.get('_app_sc_skip')
 
         if not show_ai_app:
             st.info('🪞 **まず自己採点を。** AI評価を見る前に自分の面談を5軸で採点してください。'
                     '「自分の感覚」と「AIの客観評価」のズレが一番の伸びしろになります。')
-            with st.form(key=f'app_selfcheck_form_{ref_file_app}'):
+            with st.form(key='app_selfcheck_form'):
                 with st.expander('📖 採点の目安（0〜3点の意味）', expanded=False):
                     for line in SCORE_LADDER_APP:
                         st.markdown(f'- {line}')
@@ -912,24 +800,24 @@ if uploaded:
                                 unsafe_allow_html=True)
                     sc_scores_app[ax] = st.slider(
                         AXIS_SHORT_APP[ax], min_value=0.0, max_value=3.0, value=2.0, step=0.5,
-                        key=f'app_sc_{ref_file_app}_{ax}', label_visibility='collapsed')
+                        key=f'app_sc_{ax}', label_visibility='collapsed')
 
                 st.markdown('**② できたと思う行動にチェック**')
                 bc1, bc2 = st.columns(2)
                 bchecks_app = {
-                    '感情ワードを拾って深掘りした':           bc1.checkbox('感情ワードを拾って深掘りした', key=f'app_bc1_{ref_file_app}'),
-                    '強みを言語化して返した':                 bc2.checkbox('強みを言語化して返した', key=f'app_bc2_{ref_file_app}'),
-                    '応募企業に固執させず他の選択肢に触れた': bc1.checkbox('応募企業に固執させず他の選択肢に触れた', key=f'app_bc3_{ref_file_app}'),
-                    '求職者の発言を要約して同意を取った':     bc2.checkbox('求職者の発言を要約して同意を取った', key=f'app_bc4_{ref_file_app}'),
-                    '沈黙を恐れず考える間を与えた':           bc1.checkbox('沈黙を恐れず考える間を与えた', key=f'app_bc5_{ref_file_app}'),
-                    'MUST提案をした':                         bc2.checkbox('MUST提案をした', key=f'app_bc6_{ref_file_app}'),
-                    '次回アポを確定した':                     bc1.checkbox('次回アポを確定した', key=f'app_bc7_{ref_file_app}'),
+                    '感情ワードを拾って深掘りした':           bc1.checkbox('感情ワードを拾って深掘りした', key='app_bc1'),
+                    '強みを言語化して返した':                 bc2.checkbox('強みを言語化して返した', key='app_bc2'),
+                    '応募企業に固執させず他の選択肢に触れた': bc1.checkbox('応募企業に固執させず他の選択肢に触れた', key='app_bc3'),
+                    '求職者の発言を要約して同意を取った':     bc2.checkbox('求職者の発言を要約して同意を取った', key='app_bc4'),
+                    '沈黙を恐れず考える間を与えた':           bc1.checkbox('沈黙を恐れず考える間を与えた', key='app_bc5'),
+                    'MUST提案をした':                         bc2.checkbox('MUST提案をした', key='app_bc6'),
+                    '次回アポを確定した':                     bc1.checkbox('次回アポを確定した', key='app_bc7'),
                 }
 
                 st.markdown('**③ 今日の面談の振り返り**')
-                best_self_app = st.text_input('自分で「ここは良かった」と思う点', key=f'app_best_{ref_file_app}',
+                best_self_app = st.text_input('自分で「ここは良かった」と思う点', key='app_best',
                                               placeholder='例：価値観をしっかり引き出せた')
-                next_one_app  = st.text_area('次の面談で試したいこと（1つ）', key=f'app_no_{ref_file_app}',
+                next_one_app  = st.text_area('次の面談で試したいこと（1つ）', key='app_no',
                                              placeholder='例：感情ワードが出たら必ず「それってどんな気持ちでしたか？」と返す')
 
                 col_save, col_skip = st.columns([2, 1])
@@ -938,19 +826,21 @@ if uploaded:
                 do_skip_app = col_skip.form_submit_button('⏭ スキップ', use_container_width=True)
 
             if do_save_app:
+                # session_stateからスライダー値を取得して保存
+                scores_to_save = {ax: st.session_state.get(f'app_sc_{ax}', 2.0) for ax in AXES_APP}
                 save_selfcheck_app(ref_file_app, ca_input, grip_input, cand_input,
-                                   meeting_type, sc_scores_app, bchecks_app,
+                                   meeting_type, scores_to_save, bchecks_app,
                                    next_one_app, best_self_app)
-                st.session_state[sc_key_done] = True
-                st.rerun()
+                st.session_state['_app_sc_done'] = True
+                st.rerun()   # ← rerunしてもOK。表示ブロックがsession_stateから復元する
             if do_skip_app:
-                st.session_state[sc_key_skip] = True
+                st.session_state['_app_sc_skip'] = True
                 st.rerun()
-            st.stop()  # AI評価は自己採点/スキップ後のrerunで表示
+            st.stop()
 
         # ── 既存の自己採点があればズレFBを表示 ──
         sc_app = sc_existing or {}
-        if sc_app and not st.session_state.get(sc_key_skip):
+        if sc_app and not st.session_state.get('_app_sc_skip'):
             ss_app = sc_app.get('self_scores', {})
 
             def _fine_app(info):
