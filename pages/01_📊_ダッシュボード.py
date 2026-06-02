@@ -941,9 +941,10 @@ for loop_i, (_, sel_row) in enumerate(selected_rows.iterrows()):
         st.markdown('**💬 Slackに送信**')
         if st.button('Slackに送信', key=f'send_slack_{uid}', use_container_width=True):
             with st.spinner('送信中...'):
-                ok_flag, msg = send_to_slack(SLACK_WEBHOOK, d)
+                webhook = st.secrets.get("SLACK_WEBHOOK_URL", "")
+                ok_flag, msg = send_to_slack(webhook, d)
                 if ok_flag: st.success('✅ 送信しました')
-                else:        st.error(f'送信失敗：{msg}')
+                else:        st.error(f'送信失敗：{msg} (webhook長さ:{len(webhook)})')
 
     with act3:
         st.markdown('**🔄 再分析する**')
