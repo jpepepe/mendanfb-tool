@@ -9,7 +9,7 @@ import json, re, zipfile, os, tempfile, unicodedata
 from pathlib import Path
 from xml.etree import ElementTree as ET
 import anthropic
-from gdrive import upload_json
+from gdrive import upload_json, upload_json as gdrive_upload_json, download_json as gdrive_download_json
 from analysis_core import safe_json_loads
 
 # ── ページ設定 ────────────────────────────────────────────
@@ -122,6 +122,49 @@ def save_results(ca, grip, candidate, meeting_type, fmt,
     except Exception as e:
         st.warning(f"Google Drive保存失敗（ローカルには保存済み）: {e}")
     return utt_path, json_path
+
+# ── セルフチェック（app.py用：ダッシュボードと共通の定数・関数） ──
+AXES_APP = ['意向','適正','条件','認識統一','気づき']
+AXIS_SHORT_APP = {'意向':'意向把握','適正':'適正把握','条件':'条件把握',
+                  '認識統一':'認識統一','気づき':'気づき付与'}
+AXIS_DEF_APP = {
+    '意向':    '価値観・やりがいを引き出し、応募企業に固執させず意向を広げられたか',
+    '適正':    '経験・強み・適性を具体的に把握できたか',
+    '条件':    'Must/Betterを確認し、期待値を調整できたか',
+    '認識統一':'価値観・強みの要約への同意＋今後のキャリアの方向性への合意が取れたか',
+    '気づき':  '他の選択肢・新しい可能性に気づかせられたか',
+}
+SCORE_LADDER_APP = [
+    '**0点** ＝ 未実施。その観点に触れていない',
+    '**1点** ＝ 触れたが浅い・一方的な説明だけで終わった',
+    '**2点** ＝ 把握できたが、本人の確認・同意が弱い（「はい」止まり）',
+    '**3点** ＝ 根拠を引き出し、本人の明示的な同意・反応まで取れた',
+]
+
+def save_selfcheck_app(ref_file, ca, grip, candidate, meeting_type,
+                       self_scores, behavior_checks, next_one_thing, best_self=''):
+    from datetime import datetime
+    data = {
+        '_ref_file': ref_file,
+        'ca': ca, 'grip': grip, 'candidate': candidate, 'meeting_type': meeting_type,
+        'self_scores': self_scores,
+        'behavior_checks': behavior_checks,
+        'best_self': best_self,
+        'next_one_thing': next_one_thing,
+        'checked_at': datetime.now().isoformat(timespec='seconds'),
+    }
+    try:
+        gdrive_upload_json(f'selfcheck_{ref_file}', data, subfolder='selfcheck')
+    except Exception as e:
+        st.warning(f'自己採点のDrive保存失敗（記録はされません）: {e}')
+
+def load_selfcheck_app(ref_file: str) -> dict | None:
+    from gdrive import download_json_by_name
+    try:
+        return download_json_by_name(f'selfcheck_{ref_file}', subfolder='selfcheck')
+    except Exception:
+        return None
+
 
 # ── ファイルパーサー ──────────────────────────────────────
 def detect_speakers(full_text):
@@ -705,6 +748,158 @@ if uploaded:
         gd      = claude_result.get('grip_drivers', {})
         overall = claude_result.get('overall', {})
         total_score = sum(gd.get(k,{}).get('score',0) for k in ['意向','適正','条件','認識統一','気づき'])
+
+        # ══ セルフチェックゲート（AI評価を見る前に自己採点） ══
+        ref_file_app = json_path.name
+        sc_key_done  = f'app_sc_done_{ref_file_app}'
+        sc_key_skip  = f'app_sc_skip_{ref_file_app}'
+        sc_existing  = load_selfcheck_app(ref_file_app)
+        show_ai_app  = sc_existing is not None \
+                       or st.session_state.get(sc_key_done) \
+                       or st.session_state.get(sc_key_skip)
+
+        if not show_ai_app:
+            st.info('🪞 **まず自己採点を。** AI評価を見る前に自分の面談を5軸で採点してください。'
+                    '「自分の感覚」と「AIの客観評価」のズレが一番の伸びしろになります。')
+            with st.form(key=f'app_selfcheck_form_{ref_file_app}'):
+                with st.expander('📖 採点の目安（0〜3点の意味）', expanded=False):
+                    for line in SCORE_LADDER_APP:
+                        st.markdown(f'- {line}')
+
+                st.markdown('**① この面談、自分では何点だった？（各0〜3点・0.5刻み）**')
+                sc_scores_app = {}
+                for ax in AXES_APP:
+                    st.markdown(f'**{AXIS_SHORT_APP[ax]}**　'
+                                f'<small style="color:#888">{AXIS_DEF_APP[ax]}</small>',
+                                unsafe_allow_html=True)
+                    sc_scores_app[ax] = st.slider(
+                        AXIS_SHORT_APP[ax], min_value=0.0, max_value=3.0, value=2.0, step=0.5,
+                        key=f'app_sc_{ref_file_app}_{ax}', label_visibility='collapsed')
+
+                st.markdown('**② できたと思う行動にチェック**')
+                bc1, bc2 = st.columns(2)
+                bchecks_app = {
+                    '感情ワードを拾って深掘りした':           bc1.checkbox('感情ワードを拾って深掘りした', key=f'app_bc1_{ref_file_app}'),
+                    '強みを言語化して返した':                 bc2.checkbox('強みを言語化して返した', key=f'app_bc2_{ref_file_app}'),
+                    '応募企業に固執させず他の選択肢に触れた': bc1.checkbox('応募企業に固執させず他の選択肢に触れた', key=f'app_bc3_{ref_file_app}'),
+                    '求職者の発言を要約して同意を取った':     bc2.checkbox('求職者の発言を要約して同意を取った', key=f'app_bc4_{ref_file_app}'),
+                    '沈黙を恐れず考える間を与えた':           bc1.checkbox('沈黙を恐れず考える間を与えた', key=f'app_bc5_{ref_file_app}'),
+                    'MUST提案をした':                         bc2.checkbox('MUST提案をした', key=f'app_bc6_{ref_file_app}'),
+                    '次回アポを確定した':                     bc1.checkbox('次回アポを確定した', key=f'app_bc7_{ref_file_app}'),
+                }
+
+                st.markdown('**③ 今日の面談の振り返り**')
+                best_self_app = st.text_input('自分で「ここは良かった」と思う点', key=f'app_best_{ref_file_app}',
+                                              placeholder='例：価値観をしっかり引き出せた')
+                next_one_app  = st.text_area('次の面談で試したいこと（1つ）', key=f'app_no_{ref_file_app}',
+                                             placeholder='例：感情ワードが出たら必ず「それってどんな気持ちでしたか？」と返す')
+
+                col_save, col_skip = st.columns([2, 1])
+                do_save_app = col_save.form_submit_button('✅ 採点を保存してAI評価を見る',
+                                                          use_container_width=True, type='primary')
+                do_skip_app = col_skip.form_submit_button('⏭ スキップ', use_container_width=True)
+
+            if do_save_app:
+                save_selfcheck_app(ref_file_app, ca_input, grip_input, cand_input,
+                                   meeting_type, sc_scores_app, bchecks_app,
+                                   next_one_app, best_self_app)
+                st.session_state[sc_key_done] = True
+                st.rerun()
+            if do_skip_app:
+                st.session_state[sc_key_skip] = True
+                st.rerun()
+            st.stop()  # AI評価は自己採点/スキップ後のrerunで表示
+
+        # ── 既存の自己採点があればズレFBを表示 ──
+        sc_app = sc_existing or {}
+        if sc_app and not st.session_state.get(sc_key_skip):
+            ss_app = sc_app.get('self_scores', {})
+
+            def _fine_app(info):
+                v = info.get('score_fine')
+                if v is None: v = info.get('score', 0)
+                try: return float(v)
+                except: return float(info.get('score', 0) or 0)
+            g_app = lambda v: f'{v:g}'
+
+            gap_rows_html = ('<table style="width:100%;border-collapse:collapse;font-size:0.9rem">'
+                             '<tr style="background:#1F3864;color:white">'
+                             '<th style="padding:6px;text-align:left">評価軸</th>'
+                             '<th style="padding:6px">自己</th>'
+                             '<th style="padding:6px">AI</th>'
+                             '<th style="padding:6px;text-align:left">ズレ</th></tr>')
+            blind_a, under_a, cweak_a, cstrong_a = [], [], [], []
+            for ax in AXES_APP:
+                ai_s   = _fine_app(gd.get(ax, {}))
+                self_s = float(ss_app.get(ax, 0) or 0)
+                diff   = round(self_s - ai_s, 1)
+                if diff >= 0.5:
+                    tag = f'<span style="color:#c0392b">+{g_app(diff)} 自分が高め</span>'; bg = '#fcecea'
+                    blind_a.append((ax, self_s, ai_s, diff))
+                elif diff <= -0.5:
+                    tag = f'<span style="color:#2471a3">{g_app(diff)} 自分が低め</span>'; bg = '#EBF5FB'
+                    under_a.append((ax, self_s, ai_s, diff))
+                else:
+                    tag = f'<span style="color:#1e8449">±{g_app(abs(diff))} ほぼ一致</span>'; bg = '#e2efda'
+                    if ai_s >= 2: cstrong_a.append((ax, self_s, ai_s))
+                    else:         cweak_a.append((ax, self_s, ai_s))
+                gap_rows_html += (f'<tr style="background:{bg}"><td style="padding:6px">'
+                                  f'{AXIS_SHORT_APP[ax]}</td>'
+                                  f'<td style="padding:6px;text-align:center">{g_app(self_s)}</td>'
+                                  f'<td style="padding:6px;text-align:center">{g_app(ai_s)}</td>'
+                                  f'<td style="padding:6px">{tag}</td></tr>')
+            gap_rows_html += '</table>'
+            blind_a.sort(key=lambda x: -x[3])
+
+            with st.expander('🪞 自己評価とAIのズレ → あなた専用FB', expanded=True):
+                st.markdown(gap_rows_html, unsafe_allow_html=True)
+                if blind_a:
+                    b = blind_a[0]
+                    st.error(f'🎯 **今日の最優先：{AXIS_SHORT_APP[b[0]]}** — 最大の盲点'
+                             f'（自分{b[1]:g}点 / AI{b[2]:g}点）。下のAI評価の根拠を確認してください。')
+                elif cweak_a:
+                    w = sorted(cweak_a, key=lambda x: x[2])[0]
+                    st.warning(f'🎯 **今日の最優先：{AXIS_SHORT_APP[w[0]]}** — 自他ともに課題と認識している軸です。')
+                else:
+                    st.success('🎉 自己評価とAI評価がほぼ一致。自分の面談を客観視できています。')
+
+                for ax, s, a, _ in blind_a:
+                    info = gd.get(ax, {}); ev = info.get('evidence') or []
+                    h = (f'<div class="emotion-miss"><b>🔴 盲点：{AXIS_SHORT_APP[ax]}</b>'
+                         f'（自分{s:g}点 / AI{a:g}点）<br>'
+                         f'<small>「できた」と感じたが、AIは弱点と評価＝気づけていない伸びしろ。</small>')
+                    if info.get('weakness'):    h += f'<br>📌 <b>AIが見た弱み：</b>{info["weakness"]}'
+                    if ev:                      h += f'<br><small>根拠：{ev[0]}</small>'
+                    if info.get('next_action'): h += f'<br>🚀 <b>次の一手：</b>{info["next_action"]}'
+                    st.markdown(h + '</div>', unsafe_allow_html=True)
+
+                for ax, s, a in sorted(cweak_a, key=lambda x: x[2]):
+                    info = gd.get(ax, {})
+                    h = (f'<div style="background:#FEF9E7;border-left:4px solid #F39C12;'
+                         f'padding:8px 12px;border-radius:4px;margin:6px 0">'
+                         f'<b>🟠 共通課題：{AXIS_SHORT_APP[ax]}</b>（自分{s:g}点 / AI{a:g}点）<br>'
+                         f'<small>自覚あり。あとは行動に移すだけ。</small>')
+                    if info.get('next_action'): h += f'<br>🚀 {info["next_action"]}'
+                    st.markdown(h + '</div>', unsafe_allow_html=True)
+
+                for ax, s, a, _ in under_a:
+                    info = gd.get(ax, {})
+                    h = (f'<div class="bt-hit"><b>🔵 過小評価：{AXIS_SHORT_APP[ax]}</b>'
+                         f'（自分{s:g}点 / AI{a:g}点）<br>'
+                         f'<small>実はできています。自信を持って再現を。</small>')
+                    if info.get('strength'): h += f'<br>💪 {info["strength"]}'
+                    st.markdown(h + '</div>', unsafe_allow_html=True)
+
+                if cstrong_a:
+                    names = '、'.join(AXIS_SHORT_APP[ax] for ax, _, _ in cstrong_a)
+                    st.markdown(f'<div class="emotion-hit">🟢 <b>共通の強み：</b>{names}'
+                                f' — この型を継続！</div>', unsafe_allow_html=True)
+
+                if sc_app.get('best_self'):
+                    st.markdown(f'**🙌 あなたが「良かった」と書いた点：** {sc_app["best_self"]}')
+                if sc_app.get('next_one_thing'):
+                    st.markdown(f'**🚀 あなたが「次に試す」と書いたこと：** {sc_app["next_one_thing"]}')
+            st.divider()
 
         # ── グレード ────────────────────────────────────
         grade = overall.get('grade','─')
