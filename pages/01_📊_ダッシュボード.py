@@ -529,7 +529,7 @@ with st.sidebar:
     cand_q    = st.text_input('候補者名で検索', placeholder='例：岡寺')
 
     st.divider()
-    st.caption(f'💬 Slack Webhook keys: {list(st.secrets.keys())}')
+    st.caption('💬 Slack Webhook：設定済み ✅')
 
     st.divider()
     st.caption(f'総データ数：{len(df_all)}件')
@@ -941,10 +941,9 @@ for loop_i, (_, sel_row) in enumerate(selected_rows.iterrows()):
         st.markdown('**💬 Slackに送信**')
         if st.button('Slackに送信', key=f'send_slack_{uid}', use_container_width=True):
             with st.spinner('送信中...'):
-                webhook = st.secrets.get("SLACK_WEBHOOK_URL", "")
-                ok_flag, msg = send_to_slack(webhook, d)
+                ok_flag, msg = send_to_slack(SLACK_WEBHOOK, d)
                 if ok_flag: st.success('✅ 送信しました')
-                else:        st.error(f'送信失敗：{msg} (webhook長さ:{len(webhook)})')
+                else:        st.error(f'送信失敗：{msg}')
 
     with act3:
         st.markdown('**🔄 再分析する**')
