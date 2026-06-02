@@ -682,6 +682,131 @@ with st.sidebar:
 
 uploaded = st.file_uploader('ファイルをアップロード（.docx または .txt）', type=['docx','txt'])
 
+# ── rerun後に自己採点を提出した場合、session_stateから結果を復元して表示 ──
+_pending_key = next(
+    (k for k in st.session_state
+     if k.startswith('app_result_')
+     and (st.session_state.get(f'app_sc_done_{k[len("app_result_"):]}')
+          or st.session_state.get(f'app_sc_skip_{k[len("app_result_"):]}'))),
+    None
+)
+if _pending_key and not uploaded:
+    _res = st.session_state[_pending_key]
+    claude_result = _res['claude_result']
+    deep_result   = _res['deep_result']
+    metrics       = _res['metrics']
+    ca_input      = _res['ca']
+    grip_input    = _res['grip']
+    cand_input    = _res['candidate']
+    meeting_type  = _res['meeting_type']
+    ref_file_app  = _res['ref_file']
+    json_path     = Path(ref_file_app)   # 名前のみ（表示用）
+    fn_nfc        = ref_file_app
+
+    gd          = claude_result.get('grip_drivers', {})
+    overall     = claude_result.get('overall', {})
+    total_score = sum(gd.get(k,{}).get('score',0)
+                      for k in ['意向','適正','条件','認識統一','気づき'])
+    _res_key    = _pending_key
+
+    sc_key_done = f'app_sc_done_{ref_file_app}'
+    sc_key_skip = f'app_sc_skip_{ref_file_app}'
+    sc_existing = load_selfcheck_app(ref_file_app)
+    sc_app      = sc_existing or {}
+
+    # ── ズレFB（採点した場合のみ） ──
+    if sc_app and not st.session_state.get(sc_key_skip):
+        ss_app = sc_app.get('self_scores', {})
+        def _fine_r(info):
+            v = info.get('score_fine')
+            if v is None: v = info.get('score', 0)
+            try: return float(v)
+            except: return 0.0
+        g_r = lambda v: f'{v:g}'
+        gap_html_r = ('<table style="width:100%;border-collapse:collapse;font-size:0.9rem">'
+                      '<tr style="background:#1F3864;color:white">'
+                      '<th style="padding:6px;text-align:left">評価軸</th>'
+                      '<th style="padding:6px">自己</th><th style="padding:6px">AI</th>'
+                      '<th style="padding:6px;text-align:left">ズレ</th></tr>')
+        blind_r, under_r, cweak_r, cstrong_r = [], [], [], []
+        for ax in AXES_APP:
+            ai_s   = _fine_r(gd.get(ax, {}))
+            self_s = float(ss_app.get(ax, 0) or 0)
+            diff   = round(self_s - ai_s, 1)
+            if diff >= 0.5:
+                tag = f'<span style="color:#c0392b">+{g_r(diff)} 自分が高め</span>'; bg='#fcecea'
+                blind_r.append((ax, self_s, ai_s, diff))
+            elif diff <= -0.5:
+                tag = f'<span style="color:#2471a3">{g_r(diff)} 自分が低め</span>'; bg='#EBF5FB'
+                under_r.append((ax, self_s, ai_s, diff))
+            else:
+                tag = f'<span style="color:#1e8449">±{g_r(abs(diff))} ほぼ一致</span>'; bg='#e2efda'
+                if ai_s >= 2: cstrong_r.append((ax, self_s, ai_s))
+                else:         cweak_r.append((ax, self_s, ai_s))
+            gap_html_r += (f'<tr style="background:{bg}"><td style="padding:6px">{AXIS_SHORT_APP[ax]}</td>'
+                           f'<td style="padding:6px;text-align:center">{g_r(self_s)}</td>'
+                           f'<td style="padding:6px;text-align:center">{g_r(ai_s)}</td>'
+                           f'<td style="padding:6px">{tag}</td></tr>')
+        gap_html_r += '</table>'
+        blind_r.sort(key=lambda x: -x[3])
+        st.divider()
+        with st.expander('🪞 自己評価とAIのズレ → あなた専用FB', expanded=True):
+            st.markdown(gap_html_r, unsafe_allow_html=True)
+            if blind_r:
+                b = blind_r[0]
+                st.error(f'🎯 **今日の最優先：{AXIS_SHORT_APP[b[0]]}** — 最大の盲点'
+                         f'（自分{b[1]:g}点 / AI{b[2]:g}点）。下のAI評価の根拠を確認してください。')
+            elif cweak_r:
+                w = sorted(cweak_r, key=lambda x: x[2])[0]
+                st.warning(f'🎯 **今日の最優先：{AXIS_SHORT_APP[w[0]]}** — 自他ともに課題と認識している軸です。')
+            else:
+                st.success('🎉 自己評価とAI評価がほぼ一致。自分の面談を客観視できています。')
+            for ax, s, a, _ in blind_r:
+                info = gd.get(ax, {}); ev = info.get('evidence') or []
+                h = (f'<div class="emotion-miss"><b>🔴 盲点：{AXIS_SHORT_APP[ax]}</b>'
+                     f'（自分{s:g}点 / AI{a:g}点）<br>'
+                     f'<small>「できた」と感じたが、AIは弱点と評価＝気づけていない伸びしろ。</small>')
+                if info.get('weakness'):    h += f'<br>📌 <b>AIが見た弱み：</b>{info["weakness"]}'
+                if ev:                      h += f'<br><small>根拠：{ev[0]}</small>'
+                if info.get('next_action'): h += f'<br>🚀 <b>次の一手：</b>{info["next_action"]}'
+                st.markdown(h + '</div>', unsafe_allow_html=True)
+            for ax, s, a in sorted(cweak_r, key=lambda x: x[2]):
+                info = gd.get(ax, {})
+                h = (f'<div style="background:#FEF9E7;border-left:4px solid #F39C12;'
+                     f'padding:8px 12px;border-radius:4px;margin:6px 0">'
+                     f'<b>🟠 共通課題：{AXIS_SHORT_APP[ax]}</b>（自分{s:g}点 / AI{a:g}点）<br>'
+                     f'<small>自覚あり。あとは行動に移すだけ。</small>')
+                if info.get('next_action'): h += f'<br>🚀 {info["next_action"]}'
+                st.markdown(h + '</div>', unsafe_allow_html=True)
+            for ax, s, a, _ in under_r:
+                info = gd.get(ax, {})
+                h = (f'<div class="bt-hit"><b>🔵 過小評価：{AXIS_SHORT_APP[ax]}</b>'
+                     f'（自分{s:g}点 / AI{a:g}点）<br>'
+                     f'<small>実はできています。自信を持って再現を。</small>')
+                if info.get('strength'): h += f'<br>💪 {info["strength"]}'
+                st.markdown(h + '</div>', unsafe_allow_html=True)
+            if cstrong_r:
+                names = '、'.join(AXIS_SHORT_APP[ax] for ax, _, _ in cstrong_r)
+                st.markdown(f'<div class="emotion-hit">🟢 <b>共通の強み：</b>{names}'
+                            f' — この型を継続！</div>', unsafe_allow_html=True)
+            if sc_app.get('best_self'):
+                st.markdown(f'**🙌 あなたが「良かった」と書いた点：** {sc_app["best_self"]}')
+            if sc_app.get('next_one_thing'):
+                st.markdown(f'**🚀 あなたが「次に試す」と書いたこと：** {sc_app["next_one_thing"]}')
+        st.divider()
+
+    # ── AI評価（全セクション） ──
+    grade = overall.get('grade','─')
+    grade_colors = {'S':'#1a5276','A':'#1e8449','B':'#2471a3','C':'#d35400','D':'#c0392b'}
+    st.markdown(
+        f'<div style="background:{grade_colors.get(grade,"#555")};color:white;'
+        f'padding:16px 20px;border-radius:10px;margin-bottom:12px">'
+        f'<span style="font-size:2.4rem;font-weight:bold">{grade}</span>'
+        f'&nbsp;&nbsp;<span style="font-size:1rem">{overall.get("grade_reason","")}</span>'
+        f'</div>', unsafe_allow_html=True)
+    st.info('👆 上の「FB生成ツール」タブで新しいファイルをアップロードすると、別の面談を分析できます。')
+    st.stop()
+
 if uploaded:
     fn_nfc = unicodedata.normalize('NFC', uploaded.name)
     stem   = fn_nfc.rsplit('.',1)[0]
@@ -741,8 +866,21 @@ if uploaded:
             utterances, metrics, claude_result, deep_result)
         st.success(f'💾 保存完了　📊 分析結果：`output/json/{json_path.name}`　💬 話者分離：`output/utterances/{utt_path.name}`')
 
+        # ── 分析結果をsession_stateに保存（rerun後も復元できるよう） ──
+        _res_key = f'app_result_{json_path.name}'
+        st.session_state[_res_key] = {
+            'claude_result': claude_result,
+            'deep_result':   deep_result,
+            'metrics':       metrics,
+            'ca':            ca_input,
+            'grip':          grip_input,
+            'candidate':     cand_input,
+            'meeting_type':  meeting_type,
+            'ref_file':      json_path.name,
+        }
+
         # ═══════════════════════════════════════════════════
-        # 結果表示
+        # 結果表示（session_stateから復元）
         # ═══════════════════════════════════════════════════
         st.divider()
         gd      = claude_result.get('grip_drivers', {})
@@ -750,7 +888,7 @@ if uploaded:
         total_score = sum(gd.get(k,{}).get('score',0) for k in ['意向','適正','条件','認識統一','気づき'])
 
         # ══ セルフチェックゲート（AI評価を見る前に自己採点） ══
-        ref_file_app = json_path.name
+        ref_file_app = st.session_state[_res_key]['ref_file']
         sc_key_done  = f'app_sc_done_{ref_file_app}'
         sc_key_skip  = f'app_sc_skip_{ref_file_app}'
         sc_existing  = load_selfcheck_app(ref_file_app)
