@@ -483,7 +483,7 @@ def load_selfchecks():
     return out
 
 def save_selfcheck(ref_file, ca, grip, candidate, meeting_type,
-                   self_scores, behavior_checks, next_one_thing):
+                   self_scores, behavior_checks, next_one_thing, best_self=""):
     """自己採点をDriveのselfcheckフォルダに保存"""
     from datetime import datetime
     data = {
@@ -491,6 +491,7 @@ def save_selfcheck(ref_file, ca, grip, candidate, meeting_type,
         "ca": ca, "grip": grip, "candidate": candidate, "meeting_type": meeting_type,
         "self_scores": self_scores,
         "behavior_checks": behavior_checks,
+        "best_self": best_self,
         "next_one_thing": next_one_thing,
         "checked_at": datetime.now().isoformat(timespec="seconds"),
     }
@@ -673,6 +674,20 @@ GRADE_COLOR = {'S':'#1a5276','A':'#1e8449','B':'#2471a3','C':'#d35400','D':'#c03
 AXES = ['意向','適正','条件','認識統一','気づき']
 AXIS_SHORT = {'意向':'意向把握','適正':'適正把握','条件':'条件把握',
               '認識統一':'認識統一','気づき':'気づき付与'}
+AXIS_DEF = {
+    '意向':    '価値観・やりがいを引き出し、応募企業に固執させず意向を広げられたか',
+    '適正':    '経験・強み・適性を具体的に把握できたか',
+    '条件':    'Must/Betterを確認し、期待値を調整できたか',
+    '認識統一':'価値観・強みの要約への同意＋今後のキャリアの方向性への合意が取れたか',
+    '気づき':  '他の選択肢・新しい可能性に気づかせられたか',
+}
+SCORE_LADDER = [
+    '**0点** ＝ 未実施。その観点に触れていない',
+    '**1点** ＝ 触れたが浅い・一方的な説明だけで終わった',
+    '**2点** ＝ 把握できたが、本人の確認・同意が弱い（「はい」止まり）',
+    '**3点** ＝ 根拠を引き出し、本人の明示的な同意・反応まで取れた',
+]
+SCORE_OPT_LABEL = {0:'0 未実施', 1:'1 浅い', 2:'2 把握', 3:'3 確認済み'}
 
 # セルフチェックを一度だけ読み込み（CA別集計・詳細表示で共用）
 selfchecks = load_selfchecks()
@@ -837,22 +852,37 @@ for loop_i, (_, sel_row) in enumerate(selected_rows.iterrows()):
         st.info('🪞 **まず自己採点を。** AI評価を見る前に、自分の面談を5軸で採点してください。'
                 '「自分の感覚」と「AIの客観評価」のズレが、一番の伸びしろになります。')
         with st.form(key=f'selfcheck_form_{uid}'):
-            st.markdown('**この面談、自分では何点だった？（各0〜3点）**')
+            with st.expander('📖 採点の目安（0〜3点の意味）を見る', expanded=False):
+                for line in SCORE_LADDER:
+                    st.markdown(f'- {line}')
+                st.caption('※ 各軸とも共通の基準です。下の各軸の説明と照らして採点してください。')
+
+            st.markdown('**① この面談、自分では何点だった？（各0〜3点）**')
             sc_scores = {}
-            scols = st.columns(5)
-            for i, ax in enumerate(AXES):
-                sc_scores[ax] = scols[i].number_input(
-                    AXIS_SHORT[ax], min_value=0, max_value=3, value=2, step=1,
-                    key=f'scs_{uid}_{ax}')
-            st.markdown('**できたと思う行動にチェック**')
+            for ax in AXES:
+                st.markdown(f'**{AXIS_SHORT[ax]}**　<small style="color:#888">{AXIS_DEF[ax]}</small>',
+                            unsafe_allow_html=True)
+                sc_scores[ax] = st.radio(
+                    AXIS_SHORT[ax], options=[0,1,2,3], index=2, horizontal=True,
+                    format_func=lambda x: SCORE_OPT_LABEL[x],
+                    key=f'scs_{uid}_{ax}', label_visibility='collapsed')
+
+            st.markdown('**② できたと思う行動にチェック**')
             bcols = st.columns(2)
             bchecks = {
-                '感情ワードを拾って深掘りした': bcols[0].checkbox('感情ワードを拾って深掘りした', key=f'bc1_{uid}'),
-                '強みを言語化して返した':       bcols[1].checkbox('強みを言語化して返した', key=f'bc2_{uid}'),
-                'MUST提案をした':               bcols[0].checkbox('MUST提案をした', key=f'bc3_{uid}'),
-                '次回アポを確定した':           bcols[1].checkbox('次回アポを確定した', key=f'bc4_{uid}'),
+                '感情ワードを拾って深掘りした':           bcols[0].checkbox('感情ワードを拾って深掘りした', key=f'bc1_{uid}'),
+                '強みを言語化して返した':                 bcols[1].checkbox('強みを言語化して返した', key=f'bc2_{uid}'),
+                '応募企業に固執させず他の選択肢に触れた': bcols[0].checkbox('応募企業に固執させず他の選択肢に触れた', key=f'bc5_{uid}'),
+                '求職者の発言を要約して同意を取った':     bcols[1].checkbox('求職者の発言を要約して同意を取った', key=f'bc6_{uid}'),
+                '沈黙を恐れず考える間を与えた':           bcols[0].checkbox('沈黙を恐れず考える間を与えた', key=f'bc7_{uid}'),
+                'MUST提案をした':                         bcols[1].checkbox('MUST提案をした', key=f'bc3_{uid}'),
+                '次回アポを確定した':                     bcols[0].checkbox('次回アポを確定した', key=f'bc4_{uid}'),
             }
-            next_one = st.text_area(
+
+            st.markdown('**③ 今日の面談の振り返り**')
+            best_self = st.text_input('自分で「ここは良かった」と思う点', key=f'best_{uid}',
+                                      placeholder='例：価値観をしっかり引き出せた')
+            next_one  = st.text_area(
                 '次の面談で試したいこと（1つ）', key=f'no_{uid}',
                 placeholder='例：感情ワードが出たら必ず「それってどんな気持ちでしたか？」と返す')
             c_submit, c_skip = st.columns([2,1])
@@ -861,7 +891,7 @@ for loop_i, (_, sel_row) in enumerate(selected_rows.iterrows()):
         if do_save:
             try:
                 save_selfcheck(ref_file, d.get('ca',''), grip, d.get('candidate',''),
-                               d.get('meeting_type',''), sc_scores, bchecks, next_one)
+                               d.get('meeting_type',''), sc_scores, bchecks, next_one, best_self)
                 load_selfchecks.clear()
             except Exception as e:
                 st.warning(f'保存に失敗しました（AI評価は表示します）: {e}')
@@ -892,13 +922,10 @@ for loop_i, (_, sel_row) in enumerate(selected_rows.iterrows()):
                     '<th style="padding:6px;text-align:left">評価軸</th>'
                     '<th style="padding:6px">自己</th><th style="padding:6px">AI</th>'
                     '<th style="padding:6px;text-align:left">ズレ</th></tr>')
-        biggest_ax, biggest_diff = None, 0
         for ax in AXES:
             ai_s   = gd.get(ax, {}).get('score', 0)
             self_s = ss.get(ax, 0)
             diff   = self_s - ai_s
-            if abs(diff) > abs(biggest_diff):
-                biggest_diff, biggest_ax = diff, ax
             if diff > 0:
                 tag = f'<span style="color:#c0392b">+{diff} 自分が高め</span>'; bg = '#fcecea'
             elif diff < 0:
@@ -910,16 +937,89 @@ for loop_i, (_, sel_row) in enumerate(selected_rows.iterrows()):
                          f'<td style="padding:6px;text-align:center">{ai_s}</td>'
                          f'<td style="padding:6px">{tag}</td></tr>')
         gap_html += '</table>'
-        with st.expander('🪞 自己評価とAIのズレ', expanded=True):
+        # ── 4象限に分類（ズレ駆動FBの中核） ──
+        blind, under, cweak, cstrong = [], [], [], []
+        for ax in AXES:
+            ai_s   = gd.get(ax, {}).get('score', 0)
+            self_s = ss.get(ax, 0)
+            diff   = self_s - ai_s
+            if   diff >= 1:    blind.append((ax, self_s, ai_s, diff))     # 過信＝盲点
+            elif diff <= -1:   under.append((ax, self_s, ai_s, diff))     # 過小評価
+            elif self_s >= 2:  cstrong.append((ax, self_s, ai_s))         # 共通強み
+            else:              cweak.append((ax, self_s, ai_s))           # 共通課題
+        blind.sort(key=lambda x: -x[3])
+
+        with st.expander('🪞 自己評価とAIのズレ → あなた専用FB', expanded=True):
             st.markdown(gap_html, unsafe_allow_html=True)
-            if biggest_ax and biggest_diff > 0:
-                st.warning(f'**{AXIS_SHORT[biggest_ax]}** で自己評価が +{biggest_diff} 高めです。'
-                           '「できたつもり」になりやすい軸かも。下のAIの根拠を確認しましょう。')
-            elif biggest_ax and biggest_diff < 0:
-                st.info(f'**{AXIS_SHORT[biggest_ax]}** は自己評価より AI評価が高い（{biggest_diff}）。'
-                        '実はできています。自信を持ってOK。')
+
+            # 今日の最優先
+            if blind:
+                bax = blind[0]
+                st.error(f'🎯 **今日の最優先：{AXIS_SHORT[bax[0]]}** — 最大の盲点'
+                         f'（自分{bax[1]}点 / AI{bax[2]}点）。下で根拠を確認してください。')
+            elif cweak:
+                wax = sorted(cweak, key=lambda x: x[2])[0]
+                st.warning(f'🎯 **今日の最優先：{AXIS_SHORT[wax[0]]}** — 自他ともに課題と認識している軸です。')
             else:
-                st.success('自己評価とAI評価がほぼ一致。自分の面談を客観視できています👍')
+                st.success('🎉 自己評価とAI評価がほぼ一致。自分の面談を客観視できています。強みを伸ばしましょう。')
+
+            # 🔴 盲点（自分は高評価、AIは低評価）＝最重要
+            for ax, s, a, _ in blind:
+                info = gd.get(ax, {})
+                ev   = info.get('evidence') or []
+                html = (f'<div class="emotion-miss"><b>🔴 盲点：{AXIS_SHORT[ax]}</b>'
+                        f'（自分{s}点 / AI{a}点）<br>'
+                        f'<small>あなたは「できた」と感じたが、AIはここを弱点と評価。'
+                        f'＝気づけていない伸びしろ。</small>')
+                if info.get('weakness'):    html += f'<br>📌 <b>AIが見た弱み：</b>{info["weakness"]}'
+                if ev:                      html += f'<br><small>根拠：{sq(ev[0])}</small>'
+                if info.get('next_action'): html += f'<br>🚀 <b>次の一手：</b>{info["next_action"]}'
+                html += '</div>'
+                st.markdown(html, unsafe_allow_html=True)
+
+            # 🟠 共通課題（自他ともに低い）
+            for ax, s, a in sorted(cweak, key=lambda x: x[2]):
+                info = gd.get(ax, {})
+                html = (f'<div style="background:#FEF9E7;border-left:4px solid #F39C12;'
+                        f'padding:8px 12px;border-radius:4px;margin:6px 0">'
+                        f'<b>🟠 共通課題：{AXIS_SHORT[ax]}</b>（自分{s}点 / AI{a}点）<br>'
+                        f'<small>自覚あり。あとは行動に移すだけ。</small>')
+                if info.get('next_action'): html += f'<br>🚀 {info["next_action"]}'
+                html += '</div>'
+                st.markdown(html, unsafe_allow_html=True)
+
+            # 🔵 過小評価（自分は低評価、AIは高評価）＝自信に変える
+            for ax, s, a, _ in under:
+                info = gd.get(ax, {})
+                html = (f'<div class="bt-hit"><b>🔵 過小評価：{AXIS_SHORT[ax]}</b>'
+                        f'（自分{s}点 / AI{a}点）<br>'
+                        f'<small>実はできています。自信を持って再現を。</small>')
+                if info.get('strength'): html += f'<br>💪 {info["strength"]}'
+                html += '</div>'
+                st.markdown(html, unsafe_allow_html=True)
+
+            # 🟢 共通強み
+            if cstrong:
+                names = '、'.join(AXIS_SHORT[ax] for ax, _, _ in cstrong)
+                st.markdown(f'<div class="emotion-hit">🟢 <b>共通の強み：</b>{names}'
+                            f' — 自己評価通り。この型を継続！</div>', unsafe_allow_html=True)
+
+            # ── 行動チェックの事実ズレ（自己申告 vs AI記録） ──
+            bchk = sc.get('behavior_checks') or {}
+            fact_map = {'MUST提案をした': bh.get('MUST提案', False),
+                        '次回アポを確定した': bh.get('次回アポ確定', False)}
+            mismatches = [(lbl, bchk.get(lbl), aiv) for lbl, aiv in fact_map.items()
+                          if bchk.get(lbl) is not None and bchk.get(lbl) != aiv]
+            if mismatches:
+                msg = '⚠️ **行動の認識ズレ**（自己申告とAIの記録が不一致）<br>'
+                for lbl, selfv, aiv in mismatches:
+                    msg += (f'・「{lbl}」→ あなた：{"✅した" if selfv else "していない"} / '
+                            f'AI記録：{"あり" if aiv else "なし"}<br>')
+                st.markdown(f'<div class="emotion-miss">{msg}</div>', unsafe_allow_html=True)
+
+            # 本人の振り返りメモ
+            if sc.get('best_self'):
+                st.markdown(f'**🙌 あなたが「良かった」と書いた点：** {sc["best_self"]}')
             if sc.get('next_one_thing'):
                 st.markdown(f'**🚀 あなたが「次に試す」と書いたこと：** {sc["next_one_thing"]}')
 
