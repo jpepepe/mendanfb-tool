@@ -1266,6 +1266,13 @@ for loop_i, (_, sel_row) in enumerate(selected_rows.iterrows()):
 
                     if not new_score.get('overall'):
                         st.error('スコアリングに失敗しました。もう一度お試しください。')
+                        with st.expander('🔧 失敗の詳細（原因切り分け用）', expanded=True):
+                            stop = new_score.get('_debug_stop')
+                            st.write(f'**stop_reason**: `{stop}`　'
+                                     f'（max_tokens＝途中切れ / end_turn＝正常終了だがJSON崩れ / None＝空応答）')
+                            st.write(f'**応答の文字数**: {new_score.get("_debug_len", 0)}')
+                            st.write('**AIの応答（先頭1500字）**:')
+                            st.code(new_score.get('_debug_raw', '(空)') or '(空)')
                     else:
                         with st.spinner('🔍 深掘り分析中...'):
                             new_deep = core.deep_analysis_with_claude(utterances_data, ca, cand, client)

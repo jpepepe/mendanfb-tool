@@ -157,10 +157,19 @@ CA名: {ca_name} / 求職者名: {cand_name} / 形式: {fmt}
 }}
 grade基準: S=全軸2.5以上, A=10以上, B=7〜9, C=4〜6, D=3以下"""
 
-    resp = client.messages.create(
-        model='claude-sonnet-4-6', max_tokens=8000,
-        messages=[{'role': 'user', 'content': prompt}])
-    return safe_json_loads(resp.content[0].text)
+    text, stop = '', None
+    for _attempt in range(2):  # パース失敗時は1回だけ自動リトライ
+        resp = client.messages.create(
+            model='claude-sonnet-4-6', max_tokens=8000,
+            messages=[{'role': 'user', 'content': prompt}])
+        text = resp.content[0].text if resp.content else ''
+        stop = getattr(resp, 'stop_reason', None)
+        parsed = safe_json_loads(text)
+        if parsed.get('overall'):
+            return parsed
+    # 2回とも失敗：原因を呼び出し側に渡す
+    return {'_debug_stop': stop, '_debug_len': len(text or ''),
+            '_debug_raw': (text or '')[:1500]}
 
 
 def deep_analysis_with_claude(utterances, ca_name, cand_name, client):
