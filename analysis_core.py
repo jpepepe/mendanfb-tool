@@ -41,6 +41,12 @@ CAへの具体的なフィードバックをJSONで生成してください。
 - 1: 触れているが浅い・一方的な説明のみ
 - 0: 未実施
 
+## score と score_fine（必ず両方出すこと）
+- score：上記の0〜3の整数（グレード判定用）
+- score_fine：同じ評価を0.0〜3.0の小数で表した値。バンド内のニュアンスを反映する
+  （例：かろうじて2なら2.1、3に近い2なら2.8、ちょうど真ん中なら2.5）。
+  scoreの整数部と必ず整合させること（score=2ならscore_fineは1.5〜2.4の範囲）。
+
 ## グリップA基準値
 - ポジティブ反応：5回以上 / 価値観深掘り：4回以上
 - バックトラッキング：5回以上 / 感情スルー率：50%以下 / 縦深掘り：同テーマ3回以上連続
@@ -54,11 +60,11 @@ CA名: {ca_name} / 求職者名: {cand_name} / 形式: {fmt}
 ## 出力（JSONのみ）
 {{
   "grip_drivers": {{
-    "意向":    {{"score":0,"evidence":[],"strength":"","weakness":"","next_action":""}},
-    "適正":    {{"score":0,"evidence":[],"strength":"","weakness":"","next_action":""}},
-    "条件":    {{"score":0,"evidence":[],"strength":"","weakness":"","next_action":""}},
-    "認識統一":{{"score":0,"evidence":[],"strength":"","weakness":"","next_action":""}},
-    "気づき":  {{"score":0,"evidence":[],"strength":"","weakness":"","next_action":""}}
+    "意向":    {{"score":0,"score_fine":0.0,"evidence":[],"strength":"","weakness":"","next_action":""}},
+    "適正":    {{"score":0,"score_fine":0.0,"evidence":[],"strength":"","weakness":"","next_action":""}},
+    "条件":    {{"score":0,"score_fine":0.0,"evidence":[],"strength":"","weakness":"","next_action":""}},
+    "認識統一":{{"score":0,"score_fine":0.0,"evidence":[],"strength":"","weakness":"","next_action":""}},
+    "気づき":  {{"score":0,"score_fine":0.0,"evidence":[],"strength":"","weakness":"","next_action":""}}
   }},
   "behaviors": {{
     "深掘り_価値観":0,"深掘り_実績":0,

@@ -857,14 +857,13 @@ for loop_i, (_, sel_row) in enumerate(selected_rows.iterrows()):
                     st.markdown(f'- {line}')
                 st.caption('※ 各軸とも共通の基準です。下の各軸の説明と照らして採点してください。')
 
-            st.markdown('**① この面談、自分では何点だった？（各0〜3点）**')
+            st.markdown('**① この面談、自分では何点だった？（各0〜3点・0.5刻み）**')
             sc_scores = {}
             for ax in AXES:
                 st.markdown(f'**{AXIS_SHORT[ax]}**　<small style="color:#888">{AXIS_DEF[ax]}</small>',
                             unsafe_allow_html=True)
-                sc_scores[ax] = st.radio(
-                    AXIS_SHORT[ax], options=[0,1,2,3], index=2, horizontal=True,
-                    format_func=lambda x: SCORE_OPT_LABEL[x],
+                sc_scores[ax] = st.slider(
+                    AXIS_SHORT[ax], min_value=0.0, max_value=3.0, value=2.0, step=0.5,
                     key=f'scs_{uid}_{ax}', label_visibility='collapsed')
 
             st.markdown('**② できたと思う行動にチェック**')
@@ -922,31 +921,40 @@ for loop_i, (_, sel_row) in enumerate(selected_rows.iterrows()):
                     '<th style="padding:6px;text-align:left">評価軸</th>'
                     '<th style="padding:6px">自己</th><th style="padding:6px">AI</th>'
                     '<th style="padding:6px;text-align:left">ズレ</th></tr>')
+        def _fine(info):
+            v = info.get('score_fine')
+            if v is None:
+                v = info.get('score', 0)
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return float(info.get('score', 0) or 0)
+        g = lambda v: f'{v:g}'   # 2.0→"2"、2.5→"2.5"
         for ax in AXES:
-            ai_s   = gd.get(ax, {}).get('score', 0)
-            self_s = ss.get(ax, 0)
-            diff   = self_s - ai_s
-            if diff > 0:
-                tag = f'<span style="color:#c0392b">+{diff} 自分が高め</span>'; bg = '#fcecea'
-            elif diff < 0:
-                tag = f'<span style="color:#2471a3">{diff} 自分が低め</span>'; bg = '#EBF5FB'
+            ai_s   = _fine(gd.get(ax, {}))
+            self_s = float(ss.get(ax, 0) or 0)
+            diff   = round(self_s - ai_s, 1)
+            if diff >= 0.5:
+                tag = f'<span style="color:#c0392b">+{g(diff)} 自分が高め</span>'; bg = '#fcecea'
+            elif diff <= -0.5:
+                tag = f'<span style="color:#2471a3">{g(diff)} 自分が低め</span>'; bg = '#EBF5FB'
             else:
-                tag = '<span style="color:#1e8449">±0 一致</span>'; bg = '#e2efda'
+                tag = f'<span style="color:#1e8449">±{g(abs(diff))} ほぼ一致</span>'; bg = '#e2efda'
             gap_html += (f'<tr style="background:{bg}"><td style="padding:6px">{AXIS_SHORT[ax]}</td>'
-                         f'<td style="padding:6px;text-align:center">{self_s}</td>'
-                         f'<td style="padding:6px;text-align:center">{ai_s}</td>'
+                         f'<td style="padding:6px;text-align:center">{g(self_s)}</td>'
+                         f'<td style="padding:6px;text-align:center">{g(ai_s)}</td>'
                          f'<td style="padding:6px">{tag}</td></tr>')
         gap_html += '</table>'
         # ── 4象限に分類（ズレ駆動FBの中核） ──
         blind, under, cweak, cstrong = [], [], [], []
         for ax in AXES:
-            ai_s   = gd.get(ax, {}).get('score', 0)
-            self_s = ss.get(ax, 0)
-            diff   = self_s - ai_s
-            if   diff >= 1:    blind.append((ax, self_s, ai_s, diff))     # 過信＝盲点
-            elif diff <= -1:   under.append((ax, self_s, ai_s, diff))     # 過小評価
-            elif self_s >= 2:  cstrong.append((ax, self_s, ai_s))         # 共通強み
-            else:              cweak.append((ax, self_s, ai_s))           # 共通課題
+            ai_s   = _fine(gd.get(ax, {}))
+            self_s = float(ss.get(ax, 0) or 0)
+            diff   = round(self_s - ai_s, 1)
+            if   diff >= 0.5:   blind.append((ax, self_s, ai_s, diff))     # 過信＝盲点
+            elif diff <= -0.5:  under.append((ax, self_s, ai_s, diff))     # 過小評価
+            elif ai_s >= 2:     cstrong.append((ax, self_s, ai_s))         # 共通強み
+            else:               cweak.append((ax, self_s, ai_s))           # 共通課題
         blind.sort(key=lambda x: -x[3])
 
         with st.expander('🪞 自己評価とAIのズレ → あなた専用FB', expanded=True):
@@ -956,7 +964,7 @@ for loop_i, (_, sel_row) in enumerate(selected_rows.iterrows()):
             if blind:
                 bax = blind[0]
                 st.error(f'🎯 **今日の最優先：{AXIS_SHORT[bax[0]]}** — 最大の盲点'
-                         f'（自分{bax[1]}点 / AI{bax[2]}点）。下で根拠を確認してください。')
+                         f'（自分{bax[1]:g}点 / AI{bax[2]:g}点）。下で根拠を確認してください。')
             elif cweak:
                 wax = sorted(cweak, key=lambda x: x[2])[0]
                 st.warning(f'🎯 **今日の最優先：{AXIS_SHORT[wax[0]]}** — 自他ともに課題と認識している軸です。')
@@ -968,7 +976,7 @@ for loop_i, (_, sel_row) in enumerate(selected_rows.iterrows()):
                 info = gd.get(ax, {})
                 ev   = info.get('evidence') or []
                 html = (f'<div class="emotion-miss"><b>🔴 盲点：{AXIS_SHORT[ax]}</b>'
-                        f'（自分{s}点 / AI{a}点）<br>'
+                        f'（自分{s:g}点 / AI{a:g}点）<br>'
                         f'<small>あなたは「できた」と感じたが、AIはここを弱点と評価。'
                         f'＝気づけていない伸びしろ。</small>')
                 if info.get('weakness'):    html += f'<br>📌 <b>AIが見た弱み：</b>{info["weakness"]}'
@@ -982,7 +990,7 @@ for loop_i, (_, sel_row) in enumerate(selected_rows.iterrows()):
                 info = gd.get(ax, {})
                 html = (f'<div style="background:#FEF9E7;border-left:4px solid #F39C12;'
                         f'padding:8px 12px;border-radius:4px;margin:6px 0">'
-                        f'<b>🟠 共通課題：{AXIS_SHORT[ax]}</b>（自分{s}点 / AI{a}点）<br>'
+                        f'<b>🟠 共通課題：{AXIS_SHORT[ax]}</b>（自分{s:g}点 / AI{a:g}点）<br>'
                         f'<small>自覚あり。あとは行動に移すだけ。</small>')
                 if info.get('next_action'): html += f'<br>🚀 {info["next_action"]}'
                 html += '</div>'
@@ -992,7 +1000,7 @@ for loop_i, (_, sel_row) in enumerate(selected_rows.iterrows()):
             for ax, s, a, _ in under:
                 info = gd.get(ax, {})
                 html = (f'<div class="bt-hit"><b>🔵 過小評価：{AXIS_SHORT[ax]}</b>'
-                        f'（自分{s}点 / AI{a}点）<br>'
+                        f'（自分{s:g}点 / AI{a:g}点）<br>'
                         f'<small>実はできています。自信を持って再現を。</small>')
                 if info.get('strength'): html += f'<br>💪 {info["strength"]}'
                 html += '</div>'
