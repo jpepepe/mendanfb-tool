@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import analysis_core as core
 import anthropic
 from gdrive import (list_json_files, download_json as gdrive_download_json,
-                    upload_summary, download_summary)
+                    upload_summary, download_summary, upload_json)
 
 st.set_page_config(page_title="面談分析ダッシュボード", page_icon="📊", layout="wide")
 
@@ -460,6 +460,42 @@ def rebuild_summary():
         pass
     return records
 
+
+# ── セルフチェック（自己評価 vs AI のズレを蓄積） ─────────────
+@st.cache_data(ttl=600)
+def load_selfchecks():
+    """Driveのselfcheckフォルダから全自己採点を取得。{参照jsonファイル名: data} で返す"""
+    out = {}
+    try:
+        files = list_json_files(subfolder="selfcheck")
+        for f in files:
+            if f["name"].startswith("_"):
+                continue
+            try:
+                d = gdrive_download_json(f["id"])
+                ref = d.get("_ref_file")
+                if ref:
+                    out[ref] = d
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
+
+def save_selfcheck(ref_file, ca, grip, candidate, meeting_type,
+                   self_scores, behavior_checks, next_one_thing):
+    """自己採点をDriveのselfcheckフォルダに保存"""
+    from datetime import datetime
+    data = {
+        "_ref_file": ref_file,
+        "ca": ca, "grip": grip, "candidate": candidate, "meeting_type": meeting_type,
+        "self_scores": self_scores,
+        "behavior_checks": behavior_checks,
+        "next_one_thing": next_one_thing,
+        "checked_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    upload_json(f"selfcheck_{ref_file}", data, subfolder="selfcheck")
+
 def _append_record(records, d, filename, path_or_id):
     try:
         gd = d.get('grip_drivers', {})
@@ -634,6 +670,53 @@ if sel_ca == '全員' and df['CA'].nunique() > 1:
 
 GRADE_COLOR = {'S':'#1a5276','A':'#1e8449','B':'#2471a3','C':'#d35400','D':'#c0392b'}
 
+AXES = ['意向','適正','条件','認識統一','気づき']
+AXIS_SHORT = {'意向':'意向把握','適正':'適正把握','条件':'条件把握',
+              '認識統一':'認識統一','気づき':'気づき付与'}
+
+# セルフチェックを一度だけ読み込み（CA別集計・詳細表示で共用）
+selfchecks = load_selfchecks()
+
+# ════════════════════════════════════════════════════════
+# 自己評価 vs AI のズレ（CA別）
+# ════════════════════════════════════════════════════════
+if selfchecks:
+    gap_rows = []
+    for ref, sc in selfchecks.items():
+        match = df_all[df_all['_file'] == ref]
+        if match.empty:
+            continue
+        r = match.iloc[0]
+        ss = sc.get('self_scores', {})
+        for ax in AXES:
+            gap_rows.append({
+                'CA':   r['CA'],
+                '_ref': ref,
+                'ズレ':  ss.get(ax, 0) - int(r[ax]),
+            })
+    if gap_rows:
+        gdf = pd.DataFrame(gap_rows)
+        agg = gdf.groupby('CA').agg(
+            自己採点件数=('_ref', 'nunique'),
+            平均ズレ=('ズレ', 'mean'),
+            平均絶対ズレ=('ズレ', lambda s: s.abs().mean()),
+        ).round(2).reset_index().sort_values('平均ズレ', ascending=False)
+
+        def _tendency(v):
+            if v >= 0.5:  return '🔴 自己評価が甘い（過大）'
+            if v <= -0.5: return '🔵 自己評価が辛い（過小）'
+            return '🟢 AIとほぼ一致'
+        agg['傾向'] = agg['平均ズレ'].apply(_tendency)
+
+        st.markdown('<div class="section-title">🪞 自己評価とAIのズレ（CA別）'
+                    '　※自己採点を入力した面談のみ集計</div>', unsafe_allow_html=True)
+        st.caption('「平均ズレ」がプラス＝自分を高く評価しがち / マイナス＝低く評価しがち。'
+                   'ズレが大きいほど、自分の面談を客観視できていない可能性があります。')
+        st.dataframe(
+            agg[['CA','自己採点件数','平均ズレ','平均絶対ズレ','傾向']],
+            use_container_width=True, hide_index=True)
+        st.divider()
+
 # ════════════════════════════════════════════════════════
 # 面談一覧（チェックボックス選択）
 # ════════════════════════════════════════════════════════
@@ -736,8 +819,62 @@ for loop_i, (_, sel_row) in enumerate(selected_rows.iterrows()):
     total_score = sum(gd.get(ax,{}).get('score',0) for ax in AXES)
     grade = ov.get('grade','') or ('S' if total_score>=13 else 'A' if total_score>=10 else 'B' if total_score>=7 else 'C' if total_score>=4 else 'D')
     gc    = GRADE_COLOR.get(grade,'#555')
+    uid = f'{loop_i}_{sel_row.get("_file","").replace(".","_")}'
+    ref_file = sel_row.get('_file', '')
 
-    # ── 候補者ヘッダー ──
+    # ════ セルフチェックのゲート（AI評価を見る前に自己採点） ════
+    sc      = selfchecks.get(ref_file)
+    skipped = st.session_state.get(f'sc_skip_{ref_file}', False)
+    show_ai = (sc is not None) or skipped
+
+    if not show_ai:
+        # AI評価を隠し、記憶が新しいうちに自己採点を促す
+        st.markdown(
+            f'<div style="background:#555;color:white;padding:14px 20px;border-radius:10px;margin:16px 0 8px 0">'
+            f'<span style="font-size:1rem">'
+            f'CA: {d.get("ca","")}　/　グリップ: {grip}　/　{d.get("candidate","")}　/　{d.get("meeting_type","")}'
+            f'</span></div>', unsafe_allow_html=True)
+        st.info('🪞 **まず自己採点を。** AI評価を見る前に、自分の面談を5軸で採点してください。'
+                '「自分の感覚」と「AIの客観評価」のズレが、一番の伸びしろになります。')
+        with st.form(key=f'selfcheck_form_{uid}'):
+            st.markdown('**この面談、自分では何点だった？（各0〜3点）**')
+            sc_scores = {}
+            scols = st.columns(5)
+            for i, ax in enumerate(AXES):
+                sc_scores[ax] = scols[i].number_input(
+                    AXIS_SHORT[ax], min_value=0, max_value=3, value=2, step=1,
+                    key=f'scs_{uid}_{ax}')
+            st.markdown('**できたと思う行動にチェック**')
+            bcols = st.columns(2)
+            bchecks = {
+                '感情ワードを拾って深掘りした': bcols[0].checkbox('感情ワードを拾って深掘りした', key=f'bc1_{uid}'),
+                '強みを言語化して返した':       bcols[1].checkbox('強みを言語化して返した', key=f'bc2_{uid}'),
+                'MUST提案をした':               bcols[0].checkbox('MUST提案をした', key=f'bc3_{uid}'),
+                '次回アポを確定した':           bcols[1].checkbox('次回アポを確定した', key=f'bc4_{uid}'),
+            }
+            next_one = st.text_area(
+                '次の面談で試したいこと（1つ）', key=f'no_{uid}',
+                placeholder='例：感情ワードが出たら必ず「それってどんな気持ちでしたか？」と返す')
+            c_submit, c_skip = st.columns([2,1])
+            do_save = c_submit.form_submit_button('✅ 採点を保存してAI評価を見る', use_container_width=True, type='primary')
+            do_skip = c_skip.form_submit_button('⏭ スキップ', use_container_width=True)
+        if do_save:
+            try:
+                save_selfcheck(ref_file, d.get('ca',''), grip, d.get('candidate',''),
+                               d.get('meeting_type',''), sc_scores, bchecks, next_one)
+                load_selfchecks.clear()
+            except Exception as e:
+                st.warning(f'保存に失敗しました（AI評価は表示します）: {e}')
+                st.session_state[f'sc_skip_{ref_file}'] = True
+            st.session_state['checked_paths'] = checked_paths
+            st.rerun()
+        if do_skip:
+            st.session_state[f'sc_skip_{ref_file}'] = True
+            st.session_state['checked_paths'] = checked_paths
+            st.rerun()
+        continue  # AI評価は自己採点 or スキップ後のrerunで表示
+
+    # ── 候補者ヘッダー（AI評価） ──
     st.markdown(
         f'<div style="background:{gc};color:white;padding:14px 20px;border-radius:10px;margin:16px 0 8px 0">'
         f'<span style="font-size:2rem;font-weight:bold">{grade}</span>'
@@ -747,6 +884,45 @@ for loop_i, (_, sel_row) in enumerate(selected_rows.iterrows()):
         + (f'<br><small>{ov.get("grade_reason","")}</small>' if ov.get('grade_reason') else '')
         + '</div>', unsafe_allow_html=True)
 
+    # ── 自己評価 vs AI のズレ ──
+    if sc is not None:
+        ss = sc.get('self_scores', {})
+        gap_html = ('<table style="width:100%;border-collapse:collapse;font-size:0.9rem">'
+                    '<tr style="background:#1F3864;color:white">'
+                    '<th style="padding:6px;text-align:left">評価軸</th>'
+                    '<th style="padding:6px">自己</th><th style="padding:6px">AI</th>'
+                    '<th style="padding:6px;text-align:left">ズレ</th></tr>')
+        biggest_ax, biggest_diff = None, 0
+        for ax in AXES:
+            ai_s   = gd.get(ax, {}).get('score', 0)
+            self_s = ss.get(ax, 0)
+            diff   = self_s - ai_s
+            if abs(diff) > abs(biggest_diff):
+                biggest_diff, biggest_ax = diff, ax
+            if diff > 0:
+                tag = f'<span style="color:#c0392b">+{diff} 自分が高め</span>'; bg = '#fcecea'
+            elif diff < 0:
+                tag = f'<span style="color:#2471a3">{diff} 自分が低め</span>'; bg = '#EBF5FB'
+            else:
+                tag = '<span style="color:#1e8449">±0 一致</span>'; bg = '#e2efda'
+            gap_html += (f'<tr style="background:{bg}"><td style="padding:6px">{AXIS_SHORT[ax]}</td>'
+                         f'<td style="padding:6px;text-align:center">{self_s}</td>'
+                         f'<td style="padding:6px;text-align:center">{ai_s}</td>'
+                         f'<td style="padding:6px">{tag}</td></tr>')
+        gap_html += '</table>'
+        with st.expander('🪞 自己評価とAIのズレ', expanded=True):
+            st.markdown(gap_html, unsafe_allow_html=True)
+            if biggest_ax and biggest_diff > 0:
+                st.warning(f'**{AXIS_SHORT[biggest_ax]}** で自己評価が +{biggest_diff} 高めです。'
+                           '「できたつもり」になりやすい軸かも。下のAIの根拠を確認しましょう。')
+            elif biggest_ax and biggest_diff < 0:
+                st.info(f'**{AXIS_SHORT[biggest_ax]}** は自己評価より AI評価が高い（{biggest_diff}）。'
+                        '実はできています。自信を持ってOK。')
+            else:
+                st.success('自己評価とAI評価がほぼ一致。自分の面談を客観視できています👍')
+            if sc.get('next_one_thing'):
+                st.markdown(f'**🚀 あなたが「次に試す」と書いたこと：** {sc["next_one_thing"]}')
+
     # KPI行
     k1,k2,k3,k4,k5,k6 = st.columns(6)
     k1.metric('総合スコア',    f'{total_score}/15')
@@ -755,8 +931,6 @@ for loop_i, (_, sel_row) in enumerate(selected_rows.iterrows()):
     k4.metric('縦深掘り最大',   f'{bh.get("縦深掘り最大",0)}回')
     k5.metric('ポジティブ反応', f'{bh.get("ポジティブ反応",0)}回')
     k6.metric('フィラー回数',   f'{bh.get("フィラー回数",0)}回')
-
-    uid = f'{loop_i}_{sel_row.get("_file","").replace(".","_")}'
 
     # ── ルーブリック採点 ──────────────────────────────────
     if 'ルーブリック採点' in show_sections:
