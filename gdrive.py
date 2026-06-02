@@ -73,3 +73,31 @@ def _find_file(service, filename: str, folder_id: str):
     ).execute()
     files = res.get("files", [])
     return files[0]["id"] if files else None
+
+# ── サマリーキャッシュ（ダッシュボード高速化用） ─────────────
+SUMMARY_FILENAME = "_dashboard_summary.json"
+
+def download_json_by_name(filename: str, subfolder: str = "json") -> dict | None:
+    """ファイル名でJSONをDriveから取得。なければNone"""
+    service = get_drive_service()
+    folder_id = _get_or_create_subfolder(service, subfolder)
+    file_id = _find_file(service, filename, folder_id)
+    if not file_id:
+        return None
+    return download_json(file_id)
+
+def upload_summary(records: list) -> None:
+    """ダッシュボード用サマリーJSONをDriveに保存（_rawは除外）"""
+    # _raw は大きいので除外してから保存
+    slim = [{k: v for k, v in r.items() if k != "_raw"} for r in records]
+    upload_json(SUMMARY_FILENAME, {"records": slim, "version": 1}, subfolder="json")
+
+def download_summary() -> list | None:
+    """サマリーJSONをDriveから取得。なければNone"""
+    try:
+        data = download_json_by_name(SUMMARY_FILENAME, subfolder="json")
+        if data and "records" in data:
+            return data["records"]
+    except Exception:
+        pass
+    return None

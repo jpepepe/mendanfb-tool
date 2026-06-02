@@ -14,7 +14,8 @@ import requests
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import analysis_core as core
 import anthropic
-from gdrive import list_json_files, download_json as gdrive_download_json
+from gdrive import (list_json_files, download_json as gdrive_download_json,
+                    upload_summary, download_summary)
 
 st.set_page_config(page_title="面談分析ダッシュボード", page_icon="📊", layout="wide")
 
@@ -398,22 +399,40 @@ def send_to_slack(webhook_url: str, d: dict) -> tuple[bool, str]:
 
 
 # ── データ読み込み ─────────────────────────────────────────
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=600)
 def load_all_records():
+    """サマリーJSONが存在すればそれを使う（高速）。なければ全件ダウンロードして自動保存。"""
+    # ① サマリーJSONを試す（1ファイル取得で完結）
+    try:
+        summary = download_summary()
+        if summary:
+            return pd.DataFrame(summary)
+    except Exception:
+        pass
+
+    # ② フォールバック: Google Drive から全件ダウンロード
     records = []
-    # Google Drive から読み込み
     try:
         drive_files = list_json_files(subfolder="json")
+        # サマリーファイル自体は除外
+        drive_files = [f for f in drive_files if not f["name"].startswith("_")]
         for f in sorted(drive_files, key=lambda x: x["name"]):
             try:
                 d = gdrive_download_json(f["id"])
                 _append_record(records, d, f["name"], f["id"])
             except Exception:
                 continue
+        # 次回以降はサマリーで高速読み込みできるよう自動保存
+        if records:
+            try:
+                upload_summary(records)
+            except Exception:
+                pass
         return pd.DataFrame(records)
     except Exception:
         pass
-    # フォールバック: ローカルから読み込み
+
+    # ③ 最終フォールバック: ローカルから読み込み
     for f in sorted(OUTPUT_JSON.glob("*.json")):
         try:
             d = json.loads(f.read_text(encoding='utf-8'))
@@ -421,6 +440,25 @@ def load_all_records():
         except Exception:
             continue
     return pd.DataFrame(records)
+
+
+def rebuild_summary():
+    """全件ダウンロードしてサマリーJSONを再構築。「再読み込み」ボタンから呼ぶ。"""
+    records = []
+    try:
+        drive_files = list_json_files(subfolder="json")
+        drive_files = [f for f in drive_files if not f["name"].startswith("_")]
+        for f in sorted(drive_files, key=lambda x: x["name"]):
+            try:
+                d = gdrive_download_json(f["id"])
+                _append_record(records, d, f["name"], f["id"])
+            except Exception:
+                continue
+        if records:
+            upload_summary(records)
+    except Exception:
+        pass
+    return records
 
 def _append_record(records, d, filename, path_or_id):
     try:
@@ -443,7 +481,6 @@ def _append_record(records, d, filename, path_or_id):
         records.append({
             '_file':       filename,
             '_path':       path_or_id,
-            '_raw':        d,
             'CA':          d.get('ca', ''),
             'グリップ':     d.get('grip', 'X'),
             '候補者':       d.get('candidate', ''),
@@ -497,6 +534,8 @@ with st.sidebar:
     st.divider()
     st.caption(f'総データ数：{len(df_all)}件')
     if st.button('🔄 データを再読み込み'):
+        with st.spinner('Drive から全件取得してサマリーを更新中...'):
+            rebuild_summary()
         load_all_records.clear()
         st.rerun()
 
