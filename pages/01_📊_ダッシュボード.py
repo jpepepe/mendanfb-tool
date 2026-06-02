@@ -990,10 +990,20 @@ for loop_i, (_, sel_row) in enumerate(selected_rows.iterrows()):
 
                         bh_existing = {k: v for k, v in d.get('behaviors',{}).items()
                                        if not isinstance(v, (list, bool))}
-                        core.save_analysis(ca, d.get('grip','X'), cand,
+                        json_path = core.save_analysis(ca, d.get('grip','X'), cand,
                                            d.get('meeting_type',''), fmt,
                                            bh_existing, new_score, new_deep)
-                        # チェック状態を保持したまま再読み込み
+                        # Google Drive にも上書き保存
+                        try:
+                            from gdrive import upload_json
+                            import json as _json
+                            new_data = _json.loads(json_path.read_text(encoding='utf-8'))
+                            upload_json(json_path.name, new_data, subfolder="json")
+                        except Exception as e:
+                            st.warning(f'Drive保存に失敗しました（ローカルには保存済み）: {e}')
+                        # サマリーも再構築してキャッシュクリア
+                        with st.spinner('サマリーを更新中...'):
+                            rebuild_summary()
                         st.session_state['checked_paths'] = checked_paths
                         load_all_records.clear()
                         st.success('✅ 再分析完了！')
