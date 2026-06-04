@@ -879,9 +879,10 @@ CA名: {ca_name} / 求職者名: {cand_name}
         resp = client.messages.create(
             model='claude-sonnet-4-6', max_tokens=8000,
             messages=[{'role': 'user', 'content': prompt}])
-        return safe_json_loads(resp.content[0].text)
-    except Exception:
-        return {}
+        result = safe_json_loads(resp.content[0].text)
+        return result if result else {}
+    except Exception as e:
+        raise e  # 呼び出し元でキャッチしてユーザーに表示
 
 # ── チェックポイント評価 ──────────────────────────────────
 def evaluate_checklist(metrics, claude_result):
@@ -1058,7 +1059,14 @@ if uploaded:
             st.stop()
 
         with st.spinner('🔍 深掘り・自己開示・バックトラッキングを分析中...'):
-            deep_result = deep_analysis_with_claude(utterances, ca_input, cand_input, client)
+            try:
+                deep_result = deep_analysis_with_claude(utterances, ca_input, cand_input, client)
+                if not deep_result:
+                    st.warning('⚠️ 深掘り分析の取得に失敗しました（JSONパースエラーの可能性）。感情深掘り・自己開示・バックトラッキングは空になります。')
+                    deep_result = {}
+            except Exception as e:
+                st.warning(f'⚠️ 深掘り分析でエラーが発生しました：{e}')
+                deep_result = {}
 
         meeting_type = '初回面談' if '初回面談' in fn_nfc else ('求人提案' if '求人提案' in fn_nfc else 'その他')
         utt_path, json_path = save_results(
