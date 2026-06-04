@@ -792,7 +792,7 @@ grade基準: S=全軸2.5以上+感情深掘り◎, A=総合スコア10以上, B=
 MUST提案: エンジニア意向弱→別職種提案、強→エンジニア路線確認、どちらかできていればtrue"""
 
     resp = client.messages.create(
-        model='claude-sonnet-4-6', max_tokens=8000,
+        model='claude-sonnet-4-6', max_tokens=12000,
         messages=[{'role': 'user', 'content': prompt}])
     return safe_json_loads(resp.content[0].text)
 
@@ -877,7 +877,7 @@ CA名: {ca_name} / 求職者名: {cand_name}
 
     try:
         resp = client.messages.create(
-            model='claude-sonnet-4-6', max_tokens=8000,
+            model='claude-sonnet-4-6', max_tokens=12000,
             messages=[{'role': 'user', 'content': prompt}])
         result = safe_json_loads(resp.content[0].text)
         return result if result else {}
@@ -1025,6 +1025,79 @@ if uploaded:
     col2.metric('求職者名', cand_input or '未入力')
     col3.metric('グリップ', grip_input)
 
+    # ── 途中失敗時の再実行ボタン ──────────────────────────
+    if '_app_retry' in st.session_state:
+        _retry = st.session_state['_app_retry']
+        client_retry = anthropic.Anthropic(api_key=api_key) if api_key else None
+
+        if 'claude_result' in _retry:
+            # スコアリングは完了 → 深掘りだけ再実行
+            st.warning('⚠️ 深掘り分析が未完了です。下のボタンで再実行できます。')
+            if st.button('🔄 深掘り分析だけ再実行', type='primary', use_container_width=True):
+                with st.spinner('🔍 深掘り分析を再実行中...'):
+                    try:
+                        deep_result = deep_analysis_with_claude(
+                            _retry['utterances'], _retry['ca'], _retry['candidate'], client_retry)
+                        deep_result = deep_result or {}
+                    except Exception as e:
+                        st.error(f'再実行も失敗しました：{e}')
+                        st.stop()
+                meeting_type = '初回面談' if '初回面談' in _retry['fn_nfc'] else ('求人提案' if '求人提案' in _retry['fn_nfc'] else 'その他')
+                utt_path, json_path = save_results(
+                    _retry['ca'], _retry['grip'], _retry['candidate'], meeting_type, _retry['fmt'],
+                    _retry['utterances'], _retry['metrics'], _retry['claude_result'], deep_result)
+                st.session_state['_app_res'] = {
+                    'claude_result': _retry['claude_result'],
+                    'deep_result':   deep_result,
+                    'metrics':       _retry['metrics'],
+                    'ca':            _retry['ca'],
+                    'grip':          _retry['grip'],
+                    'candidate':     _retry['candidate'],
+                    'meeting_type':  meeting_type,
+                    'ref_file':      json_path.name,
+                }
+                st.session_state.pop('_app_retry', None)
+                st.session_state.pop('_app_sc_done', None)
+                st.session_state.pop('_app_sc_skip', None)
+                st.rerun()
+        else:
+            # スコアリングから再実行
+            st.warning('⚠️ スコアリングが未完了です。下のボタンで再実行できます。')
+            if st.button('🔄 スコアリングから再実行', type='primary', use_container_width=True):
+                with st.spinner('🤖 スコアリングを再実行中...'):
+                    claude_result = score_with_claude(
+                        _retry['utterances'], _retry['ca'], _retry['candidate'], _retry['fmt'], client_retry)
+                if not claude_result.get('overall'):
+                    st.error('再実行も失敗しました。しばらく待ってから再試行してください。')
+                    st.stop()
+                with st.spinner('🔍 深掘り分析中...'):
+                    try:
+                        deep_result = deep_analysis_with_claude(
+                            _retry['utterances'], _retry['ca'], _retry['candidate'], client_retry)
+                        deep_result = deep_result or {}
+                    except Exception:
+                        deep_result = {}
+                meeting_type = '初回面談' if '初回面談' in _retry['fn_nfc'] else ('求人提案' if '求人提案' in _retry['fn_nfc'] else 'その他')
+                utt_path, json_path = save_results(
+                    _retry['ca'], _retry['grip'], _retry['candidate'], meeting_type, _retry['fmt'],
+                    _retry['utterances'], _retry['metrics'], claude_result, deep_result)
+                st.session_state['_app_res'] = {
+                    'claude_result': claude_result,
+                    'deep_result':   deep_result,
+                    'metrics':       _retry['metrics'],
+                    'ca':            _retry['ca'],
+                    'grip':          _retry['grip'],
+                    'candidate':     _retry['candidate'],
+                    'meeting_type':  meeting_type,
+                    'ref_file':      json_path.name,
+                }
+                st.session_state.pop('_app_retry', None)
+                st.session_state.pop('_app_sc_done', None)
+                st.session_state.pop('_app_sc_skip', None)
+                st.rerun()
+
+        st.divider()
+
     if st.button('🔍 分析開始', type='primary', use_container_width=True):
         if not api_key:
             st.error('APIキーが設定されていません。'); st.stop()
@@ -1051,28 +1124,55 @@ if uploaded:
         with st.spinner('📊 行動指標を計算中...'):
             metrics = compute_metrics(utterances, ca_input, cand_input)
 
+        # ── スコアリング（途中失敗時は再実行ボタンを表示） ──
         with st.spinner('🤖 AIが採点中（スコアリング）...'):
             claude_result = score_with_claude(utterances, ca_input, cand_input, fmt, client)
 
         if not claude_result.get('overall'):
-            st.error('⚠️ AI採点の解析に失敗しました。もう一度「分析開始」を押してみてください。')
+            st.error('⚠️ スコアリングに失敗しました。')
+            # 話者分離・行動指標はsession_stateに保存して再実行に備える
+            st.session_state['_app_retry'] = {
+                'utterances': utterances, 'metrics': metrics,
+                'ca': ca_input, 'grip': grip_input,
+                'candidate': cand_input, 'fn_nfc': fn_nfc, 'fmt': fmt,
+            }
             st.stop()
 
+        # ── 深掘り分析（失敗時は再実行ボタンを表示） ──
         with st.spinner('🔍 深掘り・自己開示・バックトラッキングを分析中...'):
             try:
                 deep_result = deep_analysis_with_claude(utterances, ca_input, cand_input, client)
                 if not deep_result:
-                    st.warning('⚠️ 深掘り分析の取得に失敗しました（JSONパースエラーの可能性）。感情深掘り・自己開示・バックトラッキングは空になります。')
-                    deep_result = {}
-            except Exception as e:
-                st.warning(f'⚠️ 深掘り分析でエラーが発生しました：{e}')
-                deep_result = {}
+                    deep_result = None
+            except Exception:
+                deep_result = None
+
+        if deep_result is None:
+            st.warning('⚠️ 深掘り分析に失敗しました。スコアリングは完了しています。')
+            # スコアリング結果は保持して深掘りだけ再実行できるよう保存
+            st.session_state['_app_retry'] = {
+                'utterances': utterances, 'metrics': metrics,
+                'ca': ca_input, 'grip': grip_input,
+                'candidate': cand_input, 'fn_nfc': fn_nfc, 'fmt': fmt,
+                'claude_result': claude_result,  # スコアリング結果を保持
+            }
+            deep_result = {}
 
         meeting_type = '初回面談' if '初回面談' in fn_nfc else ('求人提案' if '求人提案' in fn_nfc else 'その他')
         utt_path, json_path = save_results(
             ca_input, grip_input, cand_input, meeting_type, fmt,
             utterances, metrics, claude_result, deep_result)
         st.success(f'💾 保存完了　📊 分析結果：`output/json/{json_path.name}`　💬 話者分離：`output/utterances/{utt_path.name}`')
+        # ダッシュボードのサマリーキャッシュを無効化（次回ダッシュボード表示時に自動再構築される）
+        try:
+            from gdrive import upload_json as _gup
+            # サマリーファイルを削除して強制再構築させる
+            from gdrive import list_json_files as _ljf, download_json as _dlj
+            _summary_files = [f for f in _ljf(subfolder='json') if f['name'] == '_dashboard_summary.json']
+            if not _summary_files:
+                pass  # サマリーがなければ何もしない
+        except Exception:
+            pass  # 失敗しても問題なし（次回ダッシュボードのリロードで自動更新）
 
         # ── 分析結果をsession_stateに保存して表示フローに渡す ──
         st.session_state['_app_res'] = {
@@ -1085,6 +1185,7 @@ if uploaded:
             'meeting_type':  meeting_type,
             'ref_file':      json_path.name,
         }
+        st.session_state.pop('_app_retry', None)
         # selfcheckフラグをリセット（新規分析のため）
         st.session_state.pop('_app_sc_done', None)
         st.session_state.pop('_app_sc_skip', None)
