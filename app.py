@@ -510,6 +510,8 @@ def parse_docx(file_bytes):
         full_text = re.sub(r'^\d{2}:\d{2}:\d{2}\n', '', full_text, flags=re.MULTILINE)
         full_text = re.sub(r'^\d{4}年.+\n',         '', full_text, flags=re.MULTILINE)
         full_text = re.sub(r'^会議\s.+\n',           '', full_text, flags=re.MULTILINE)
+        # 全角コロン（：）を半角コロン+スペース（: ）に統一
+        full_text = re.sub(r'([぀-鿿a-zA-Zー]{2,10})：', r'\1: ', full_text)
         speakers = detect_speakers(full_text)
         if not speakers: return [], full_text, 'docx'
         pat = re.compile(r'(?:' + '|'.join(re.escape(s) for s in speakers) + r'):\s*')
