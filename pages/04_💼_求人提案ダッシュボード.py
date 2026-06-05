@@ -16,7 +16,7 @@ from gdrive import (list_json_files, download_json as gdrive_download_json,
 import anthropic
 import requests
 
-st.set_page_config(page_title="求人提案ダッシュボード", page_icon="💼", layout="wide")
+
 
 st.markdown("""
 <style>

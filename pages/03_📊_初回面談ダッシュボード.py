@@ -17,7 +17,7 @@ import anthropic
 from gdrive import (list_json_files, download_json as gdrive_download_json,
                     upload_summary, download_summary, upload_json)
 
-st.set_page_config(page_title="面談分析ダッシュボード", page_icon="📊", layout="wide")
+
 
 # ── スタイル ──────────────────────────────────────────────
 st.markdown("""

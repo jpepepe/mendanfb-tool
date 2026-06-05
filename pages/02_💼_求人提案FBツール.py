@@ -13,11 +13,7 @@ from gdrive import upload_json as gdrive_upload_json, upload_proposal_summary as
 
 SLACK_WEBHOOK = st.secrets.get("SLACK_WEBHOOK_URL", "") if hasattr(st, 'secrets') else ""
 
-st.set_page_config(
-    page_title="求人提案 FB ツール",
-    page_icon="💼",
-    layout="wide"
-)
+
 
 st.markdown("""
 <style>
