@@ -7,6 +7,7 @@ CA・グリップ・候補者名・面談種別でフィルタリングして過
 import streamlit as st
 import json, re, os, sys, io
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import requests
 
@@ -410,18 +411,21 @@ def load_all_records():
     except Exception:
         pass
 
-    # ② フォールバック: Google Drive から全件ダウンロード
+    # ② フォールバック: Google Drive から全件並列ダウンロード
     records = []
     try:
         drive_files = list_json_files(subfolder="json")
-        # サマリーファイル自体は除外
         drive_files = [f for f in drive_files if not f["name"].startswith("_")]
-        for f in sorted(drive_files, key=lambda x: x["name"]):
+        def _dl(f):
             try:
-                d = gdrive_download_json(f["id"])
-                _append_record(records, d, f["name"], f["id"])
+                return f["name"], f["id"], gdrive_download_json(f["id"])
             except Exception:
-                continue
+                return None
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            for result in as_completed([ex.submit(_dl, f) for f in drive_files]):
+                r = result.result()
+                if r:
+                    _append_record(records, r[2], r[0], r[1])
         # 次回以降はサマリーで高速読み込みできるよう自動保存
         if records:
             try:
@@ -443,17 +447,21 @@ def load_all_records():
 
 
 def rebuild_summary():
-    """全件ダウンロードしてサマリーJSONを再構築。「再読み込み」ボタンから呼ぶ。"""
+    """全件並列ダウンロードしてサマリーJSONを再構築。「再読み込み」ボタンから呼ぶ。"""
     records = []
     try:
         drive_files = list_json_files(subfolder="json")
         drive_files = [f for f in drive_files if not f["name"].startswith("_")]
-        for f in sorted(drive_files, key=lambda x: x["name"]):
+        def _dl(f):
             try:
-                d = gdrive_download_json(f["id"])
-                _append_record(records, d, f["name"], f["id"])
+                return f["name"], f["id"], gdrive_download_json(f["id"])
             except Exception:
-                continue
+                return None
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            for result in as_completed([ex.submit(_dl, f) for f in drive_files]):
+                r = result.result()
+                if r:
+                    _append_record(records, r[2], r[0], r[1])
         if records:
             upload_summary(records)
     except Exception:

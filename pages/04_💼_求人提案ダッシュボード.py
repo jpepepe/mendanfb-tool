@@ -7,6 +7,7 @@ import streamlit as st
 import json, sys, os, io
 from pathlib import Path
 from typing import Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -594,16 +595,20 @@ def load_proposal_records():
     except Exception:
         pass
 
-    # ② サマリーなし → 全件DLしてサマリーを自動生成
+    # ② サマリーなし → 全件並列DLしてサマリーを自動生成
     try:
         drive_files = list_json_files(subfolder="json_proposal")
         drive_files = [f for f in drive_files if not f["name"].startswith("_")]
-        for f in sorted(drive_files, key=lambda x: x["name"]):
+        def _dl(f):
             try:
-                d = gdrive_download_json(f["id"])
-                _append(records, d, f["name"], f["id"])
+                return f["name"], f["id"], gdrive_download_json(f["id"])
             except Exception:
-                continue
+                return None
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            for result in as_completed([ex.submit(_dl, f) for f in drive_files]):
+                r = result.result()
+                if r:
+                    _append(records, r[2], r[0], r[1])
         if records:
             try:
                 upload_proposal_summary(records)
@@ -625,17 +630,21 @@ def load_proposal_records():
     return pd.DataFrame(records)
 
 def rebuild_proposal_summary():
-    """全件DLしてサマリーを再構築。「再読み込み」ボタンから呼ぶ。"""
+    """全件並列DLしてサマリーを再構築。「再読み込み」ボタンから呼ぶ。"""
     records = []
     try:
         drive_files = list_json_files(subfolder="json_proposal")
         drive_files = [f for f in drive_files if not f["name"].startswith("_")]
-        for f in sorted(drive_files, key=lambda x: x["name"]):
+        def _dl(f):
             try:
-                d = gdrive_download_json(f["id"])
-                _append(records, d, f["name"], f["id"])
+                return f["name"], f["id"], gdrive_download_json(f["id"])
             except Exception:
-                continue
+                return None
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            for result in as_completed([ex.submit(_dl, f) for f in drive_files]):
+                r = result.result()
+                if r:
+                    _append(records, r[2], r[0], r[1])
         if records:
             upload_proposal_summary(records)
     except Exception:
