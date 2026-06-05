@@ -118,10 +118,16 @@ def save_results(ca, grip, candidate, meeting_type, fmt,
         st.warning(f"Google Drive保存失敗（ローカルには保存済み）: {e}")
     # utterances も Drive に保存（ダッシュボードからの再分析に必要）
     try:
-        utt_data = json.loads(utt_path.read_text(encoding='utf-8'))
-        upload_json(f"{key}.json", utt_data, subfolder="utterances")
-    except Exception:
-        pass
+        utt_for_drive = {
+            "ca": ca, "grip": safe_grip, "candidate": candidate,
+            "meeting_type": meeting_type, "format": fmt,
+            "speakers_detected": speakers,
+            "utterance_count": len(utterances),
+            "utterances": utterances,
+        }
+        upload_json(f"{key}.json", utt_for_drive, subfolder="utterances")
+    except Exception as e:
+        st.warning(f"文字起こしDrive保存失敗（再分析が使えない場合があります）: {e}")
     return utt_path, json_path
 
 # ── セルフチェック（app.py用：ダッシュボードと共通の定数・関数） ──
