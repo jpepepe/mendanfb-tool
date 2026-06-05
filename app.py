@@ -6,6 +6,7 @@
 
 import streamlit as st
 import json, re, zipfile, os, tempfile, unicodedata, io
+from typing import Optional
 from pathlib import Path
 from xml.etree import ElementTree as ET
 import anthropic
@@ -159,7 +160,7 @@ def save_selfcheck_app(ref_file, ca, grip, candidate, meeting_type,
     except Exception as e:
         st.warning(f'自己採点のDrive保存失敗（記録はされません）: {e}')
 
-def load_selfcheck_app(ref_file: str) -> dict | None:
+def load_selfcheck_app(ref_file: str) -> Optional[dict]:
     from gdrive import download_json_by_name
     try:
         return download_json_by_name(f'selfcheck_{ref_file}', subfolder='selfcheck')

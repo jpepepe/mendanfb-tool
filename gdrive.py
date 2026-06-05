@@ -1,5 +1,6 @@
 import json
 import io
+from typing import Optional
 import streamlit as st
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
@@ -77,7 +78,7 @@ def _find_file(service, filename: str, folder_id: str):
 # ── サマリーキャッシュ（ダッシュボード高速化用） ─────────────
 SUMMARY_FILENAME = "_dashboard_summary.json"
 
-def download_json_by_name(filename: str, subfolder: str = "json") -> dict | None:
+def download_json_by_name(filename: str, subfolder: str = "json") -> Optional[dict]:
     """ファイル名でJSONをDriveから取得。なければNone"""
     service = get_drive_service()
     folder_id = _get_or_create_subfolder(service, subfolder)
@@ -88,14 +89,30 @@ def download_json_by_name(filename: str, subfolder: str = "json") -> dict | None
 
 def upload_summary(records: list) -> None:
     """ダッシュボード用サマリーJSONをDriveに保存（_rawは除外）"""
-    # _raw は大きいので除外してから保存
     slim = [{k: v for k, v in r.items() if k != "_raw"} for r in records]
     upload_json(SUMMARY_FILENAME, {"records": slim, "version": 1}, subfolder="json")
 
-def download_summary() -> list | None:
+def download_summary() -> Optional[list]:
     """サマリーJSONをDriveから取得。なければNone"""
     try:
         data = download_json_by_name(SUMMARY_FILENAME, subfolder="json")
+        if data and "records" in data:
+            return data["records"]
+    except Exception:
+        pass
+    return None
+
+PROPOSAL_SUMMARY_FILENAME = "_proposal_summary.json"
+
+def upload_proposal_summary(records: list) -> None:
+    """求人提案ダッシュボード用サマリーJSONをDriveに保存（_rawは除外）"""
+    slim = [{k: v for k, v in r.items() if k != "_raw"} for r in records]
+    upload_json(PROPOSAL_SUMMARY_FILENAME, {"records": slim, "version": 1}, subfolder="json_proposal")
+
+def download_proposal_summary() -> Optional[list]:
+    """求人提案サマリーJSONをDriveから取得。なければNone"""
+    try:
+        data = download_json_by_name(PROPOSAL_SUMMARY_FILENAME, subfolder="json_proposal")
         if data and "records" in data:
             return data["records"]
     except Exception:

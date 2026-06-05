@@ -499,6 +499,9 @@ def save_selfcheck(ref_file, ca, grip, candidate, meeting_type,
 
 def _append_record(records, d, filename, path_or_id):
     try:
+        # 求人提案データは専用ダッシュボードで表示するためスキップ
+        if d.get('meeting_type') == '求人提案':
+            return
         gd = d.get('grip_drivers', {})
         bh = d.get('behaviors', {})
         ov = d.get('overall', {})
@@ -543,6 +546,7 @@ def _append_record(records, d, filename, path_or_id):
         })
     except Exception:
         pass
+
 
 df_all = load_all_records()
 
