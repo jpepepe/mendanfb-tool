@@ -797,10 +797,18 @@ CA名: {ca_name} / 求職者名: {cand_name} / 形式: {fmt}
 grade基準: S=全軸2.5以上+感情深掘り◎, A=総合スコア10以上, B=7〜9, C=4〜6, D=3以下
 MUST提案: エンジニア意向弱→別職種提案、強→エンジニア路線確認、どちらかできていればtrue"""
 
-    resp = client.messages.create(
-        model='claude-sonnet-4-6', max_tokens=12000,
-        messages=[{'role': 'user', 'content': prompt}])
-    return safe_json_loads(resp.content[0].text)
+    try:
+        resp = client.messages.create(
+            model='claude-sonnet-4-6', max_tokens=12000,
+            messages=[{'role': 'user', 'content': prompt}])
+        raw = resp.content[0].text
+        result = safe_json_loads(raw)
+        if not result.get('overall'):
+            st.expander('🔍 デバッグ：Claudeの生レスポンス').code(raw[:3000])
+        return result
+    except Exception as e:
+        st.error(f'スコアリングAPIエラー: {type(e).__name__}: {e}')
+        return {}
 
 
 # ── Claude採点 ── Call 2: 深掘り詳細分析（新規・別呼び出し）──
