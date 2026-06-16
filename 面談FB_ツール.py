@@ -10,6 +10,10 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 import anthropic
 
+# AIに渡すトランスクリプト最大文字数。旧来の15,000字打ち切りでは初回面談の後半
+# （条件確認・クロージング）がAIに渡らず誤判定の原因だったため拡張。
+MAX_TRANSCRIPT_CHARS = 60000
+
 # ── ページ設定 ────────────────────────────────────────────
 st.set_page_config(
     page_title="初回面談 FB ツール",
@@ -162,7 +166,7 @@ def parse_txt_with_haiku(file_bytes, ca_name, cand_name, client):
 各発言をCAまたは求職者に割り当て、JSON配列のみ返してください。
 形式: [{{"speaker": "CA", "text": "発話内容"}}, ...]
 文字起こし:
-{raw[:12000]}"""
+{raw[:40000]}"""
     resp = client.messages.create(
         model='claude-haiku-4-5-20251001', max_tokens=16000,
         messages=[{'role': 'user', 'content': prompt}])
@@ -239,18 +243,26 @@ def compute_metrics(utterances, ca_name, cand_name):
     slip_rate     = round(emotion_skip / emotion_total * 100) if emotion_total > 0 else 0
 
     # ── 縦の深掘り実例 ───────────────────────────────────
+    # 「同テーマを連続で深掘りできているか」を測る。求職者の回答ターンでは
+    # streakを切らない（一問一答の回答が間に挟まるのは正常）。CAが深掘り以外の
+    # 発話（話題転換・事実質問）をした時点でstreakを終了する。
     max_streak = cur_streak = 0
     vertical_drill_sequences = []  # list of utterance lists
     streak_buf = []
     for i in range(1, len(utterances)):
         u = utterances[i]; pv = utterances[i-1]
-        if (is_ca(u['speaker']) and DRILL_PAT.search(u['text'])
-                and not is_ca(pv['speaker']) and len(u['text']) > 8):
+        if not is_ca(u['speaker']):
+            # 求職者の回答：streak中ならシーケンスに含める（リセットしない）
+            if cur_streak > 0:
+                streak_buf.append(u)
+            continue
+        if DRILL_PAT.search(u['text']) and not is_ca(pv['speaker']) and len(u['text']) > 8:
             if cur_streak == 0: streak_buf = [pv, u]
             else:               streak_buf.append(u)
             cur_streak += 1
             max_streak = max(max_streak, cur_streak)
         else:
+            # CAの非深掘り発話（話題転換・事実質問など）でstreak終了
             if cur_streak >= 2:
                 vertical_drill_sequences.append(list(streak_buf[:8]))
             cur_streak = 0; streak_buf = []
@@ -337,7 +349,7 @@ def compute_metrics(utterances, ca_name, cand_name):
 
 # ── Claude採点 ── Call 1: スコアリング（実績ある構造を維持）────
 def score_with_claude(utterances, ca_name, cand_name, fmt, client):
-    transcript = '\n'.join(f"[{u['speaker']}] {u['text']}" for u in utterances)[:15000]
+    transcript = '\n'.join(f"[{u['speaker']}] {u['text']}" for u in utterances)[:MAX_TRANSCRIPT_CHARS]
 
     prompt = f"""あなたは人材紹介会社の敏腕トレーナーです。以下の面談文字起こしを分析し、
 CAへの具体的なフィードバックをJSONで生成してください。
@@ -395,7 +407,7 @@ grade基準: S=全軸2.5以上+感情深掘り◎, A=総合スコア10以上, B=
 MUST提案: エンジニア意向弱→別職種提案、強→エンジニア路線確認、どちらかできていればtrue"""
 
     resp = client.messages.create(
-        model='claude-sonnet-4-6', max_tokens=4000,
+        model='claude-sonnet-4-6', max_tokens=8000,
         messages=[{'role': 'user', 'content': prompt}])
     content = re.sub(r'```(?:json)?\s*', '', resp.content[0].text.strip()).strip()
     try:
@@ -410,7 +422,7 @@ MUST提案: エンジニア意向弱→別職種提案、強→エンジニア�
 
 # ── Claude採点 ── Call 2: 深掘り詳細分析（新規・別呼び出し）──
 def deep_analysis_with_claude(utterances, ca_name, cand_name, client):
-    transcript = '\n'.join(f"[{u['speaker']}] {u['text']}" for u in utterances)[:14000]
+    transcript = '\n'.join(f"[{u['speaker']}] {u['text']}" for u in utterances)[:MAX_TRANSCRIPT_CHARS]
 
     prompt = f"""あなたは人材紹介会社の面談コーチです。以下の面談文字起こしを分析し、
 3つの観点から詳細なフィードバックをJSONで返してください。

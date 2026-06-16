@@ -9,6 +9,9 @@ credentials.json
 # Streamlit secrets（GCP秘密鍵・Slack Webhookを含むので絶対に上げない）
 .streamlit/secrets.toml
 
+# Node
+node_modules/
+
 # Python
 __pycache__/
 *.pyc

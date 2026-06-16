@@ -392,7 +392,7 @@ def parse_txt_with_haiku(file_bytes, ca_name, cand_name, client):
 各発言をCAまたは求職者に割り当て、JSON配列のみ返してください。
 形式: [{{"speaker": "CA", "text": "発話内容"}}, ...]
 文字起こし:
-{raw[:12000]}"""
+{raw[:40000]}"""
     resp = client.messages.create(
         model='claude-haiku-4-5-20251001', max_tokens=16000,
         messages=[{'role': 'user', 'content': prompt}])
@@ -528,7 +528,7 @@ def compute_metrics(utterances, ca_name, cand_name):
 # ── Claude Call 1: フェーズ1〜3 + 5軸スコア + 総合評価 ──
 def phase_early_analysis(utterances, ca_name, cand_name, fmt,
                          proposed: int, accepted: int, client):
-    transcript = '\n'.join(f"[{u['speaker']}] {u['text']}" for u in utterances)[:15000]
+    transcript = '\n'.join(f"[{u['speaker']}] {u['text']}" for u in utterances)[:60000]  # 旧15000は後半が未分析になるため拡張
     prop_str = f"{proposed}件提案 / {accepted}件応諾" if proposed else "提案件数不明"
 
     prompt = f"""あなたは人材紹介会社のトレーナーです。以下は「求人提案面談」の文字起こしです。
@@ -635,7 +635,7 @@ phase2対象: 求職者が「転職活動を始めたばかり」「初めての
 
 # ── Claude Call 2: フェーズ4〜6 + フレーズ集 ─────────────
 def phase_late_analysis(utterances, ca_name, cand_name, client):
-    transcript = '\n'.join(f"[{u['speaker']}] {u['text']}" for u in utterances)[:14000]
+    transcript = '\n'.join(f"[{u['speaker']}] {u['text']}" for u in utterances)[:60000]  # 旧14000は後半が未分析になるため拡張
 
     prompt = f"""あなたは人材紹介会社の求人提案面談のコーチです。以下の文字起こしを分析し、
 フェーズ4〜6の評価とフレーズ集をJSONで返してください。

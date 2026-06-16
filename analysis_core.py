@@ -6,6 +6,11 @@ import json, re
 from pathlib import Path
 import anthropic
 
+# AIに渡すトランスクリプト最大文字数。初回面談は整形後25,000〜32,000字になるため、
+# 旧来の15,000字打ち切りでは後半（条件確認・クロージング）がAIに渡らず誤判定の原因だった。
+# sonnet-4-6 の200kコンテキストに対し十分小さく、コスト増は1件あたり数円程度。
+MAX_TRANSCRIPT_CHARS = 60000
+
 OUTPUT_JSON = Path(__file__).parent / "output" / "json"
 OUTPUT_UTT  = Path(__file__).parent / "output" / "utterances"
 OUTPUT_JSON.mkdir(parents=True, exist_ok=True)
@@ -80,7 +85,7 @@ def safe_json_loads(content: str) -> dict:
 
 def score_with_claude(utterances, ca_name, cand_name, fmt, client):
     """Call 1: ルーブリックスコアリング"""
-    transcript = '\n'.join(f"[{u['speaker']}] {u['text']}" for u in utterances)[:15000]
+    transcript = '\n'.join(f"[{u['speaker']}] {u['text']}" for u in utterances)[:MAX_TRANSCRIPT_CHARS]
     prompt = f"""あなたは人材紹介会社の敏腕トレーナーです。以下の面談文字起こしを分析し、
 CAへの具体的なフィードバックをJSONで生成してください。
 
@@ -174,7 +179,7 @@ grade基準: S=全軸2.5以上, A=10以上, B=7〜9, C=4〜6, D=3以下"""
 
 def deep_analysis_with_claude(utterances, ca_name, cand_name, client):
     """Call 2: 深掘り・自己開示・バックトラッキング分析"""
-    transcript = '\n'.join(f"[{u['speaker']}] {u['text']}" for u in utterances)[:14000]
+    transcript = '\n'.join(f"[{u['speaker']}] {u['text']}" for u in utterances)[:MAX_TRANSCRIPT_CHARS]
     prompt = f"""あなたは人材紹介会社の面談コーチです。以下の面談文字起こしを分析し、
 3つの観点から詳細なフィードバックをJSONで返してください。
 

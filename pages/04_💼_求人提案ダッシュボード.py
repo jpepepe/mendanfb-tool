@@ -368,7 +368,7 @@ def send_to_slack_proposal(webhook_url: str, d: dict) -> tuple:
 import re as _re
 
 def _phase_early(utterances, ca_name, cand_name, fmt, proposed, accepted, client):
-    transcript = '\n'.join(f"[{u['speaker']}] {u['text']}" for u in utterances)[:15000]
+    transcript = '\n'.join(f"[{u['speaker']}] {u['text']}" for u in utterances)[:60000]  # 旧15000は後半が未分析になるため拡張
     prop_str = f"{proposed}件提案 / {accepted}件応諾" if proposed else "提案件数不明"
     prompt = f"""あなたは人材紹介会社のトレーナーです。以下は「求人提案面談」の文字起こしです。
 フェーズ1〜3の評価と、5軸スコア・総合評価をJSONで返してください。
@@ -425,7 +425,7 @@ grade: S=全軸2.5以上+ミライ型+懸念深掘り◎, A=総合スコア10以
     return {}
 
 def _phase_late(utterances, ca_name, cand_name, client):
-    transcript = '\n'.join(f"[{u['speaker']}] {u['text']}" for u in utterances)[:14000]
+    transcript = '\n'.join(f"[{u['speaker']}] {u['text']}" for u in utterances)[:60000]  # 旧14000は後半が未分析になるため拡張
     prompt = f"""あなたは人材紹介会社の求人提案面談のコーチです。以下の文字起こしを分析し、
 フェーズ4〜6の評価とフレーズ集をJSONで返してください。
 
