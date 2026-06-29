@@ -77,6 +77,9 @@ def save_results(ca, grip, candidate, meeting_type, fmt,
                  utterances, metrics, claude_result, deep_result=None):
     safe_grip = grip if grip != '未入力' else 'X'
     key = f"{ca}_{safe_grip}_{candidate}_{meeting_type}"
+    # ファイル名に使えない文字（/ \ : * ? " < > |）を _ に置換し、
+    # CA名・求職者名に / 等が含まれても存在しないサブフォルダ化されないようにする
+    key = re.sub(r'[\\/:*?"<>|]+', '_', key).strip(' .') or 'untitled'
 
     # ── 話者分離データ ──────────────────────────────
     utt_path = OUTPUT_UTT / f"{key}.json"
